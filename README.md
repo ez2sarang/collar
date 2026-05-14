@@ -37,6 +37,120 @@ collar = Claude Code 위의 하네스 레이어
 
 ---
 
+## 핵심 사용자 경험 흐름
+
+collar를 처음 도입하면 3단계를 거친다.
+
+```
+1단계: 초기화 (~10초)
+────────────────────────────────────────────
+$ collar-init                  # 하네스 설치
+$ collar-watchdog              # 세션 자동 관리 등록
+$ collar-github setup          # GitHub 연동 (선택)
+
+2단계: 인터뷰 (~5~10분, 최초 1회)
+────────────────────────────────────────────
+$ collar-update                # AI가 CLAUDE.md TODO 자동 채우기
+
+  Claude Code가 묻는다:
+  - 이 프로젝트가 무엇인가?
+  - 검증 명령어는?
+  - 주요 도메인과 담당 에이전트는?
+  - 지켜야 할 규칙은?
+
+  → 답변이 CLAUDE.md에 반영된다.
+  → 이후 모든 세션에서 AI가 이 맥락으로 시작한다.
+
+3단계: 자동화 (이후 사용자 개입 없음)
+────────────────────────────────────────────
+  컨텍스트 창 60% 초과 → 자동 압축 + 다음 세션 준비
+  세션 중 발견한 패턴 → LLM이 자동으로 전역 규칙으로 승격
+  GitHub 이슈 등록 → 분류 + 버그 PR 자동 생성
+  새 세션 시작 → session-compact.md 로드 → 즉시 맥락 복원
+```
+
+---
+
+## 글로벌 vs 프로젝트별 작동
+
+collar는 두 레벨에서 독립적으로 동작한다.
+
+```
+글로벌 레벨 (~/.claude/)
+  적용 범위: 모든 프로젝트
+  ├── CLAUDE.md          공통 규칙 (완료 3단계, 모호한 표현 차단 등)
+  ├── settings.json      collar-dispatcher 전역 등록
+  └── hooks/             공급망 보안, 메모리 쓰기 가드 등 공통 훅
+
+프로젝트 레벨 (.collar/)
+  적용 범위: 해당 프로젝트만
+  ├── memory.md          이 프로젝트에서 발견된 패턴
+  ├── session-compact.md 세션 간 컨텍스트 전달 (압축본)
+  ├── config.json        watchdog/github 설정
+  ├── github.json        GitHub 레포 연결 정보
+  └── hooks/             프로젝트 전용 훅
+```
+
+글로벌 규칙은 한 번 설정하면 모든 프로젝트에 자동 적용된다.  
+프로젝트 메모리는 해당 레포에만 격리되어 다른 프로젝트와 간섭하지 않는다.
+
+---
+
+## 메모리 관리 — 반복적인 LLM 실수 방지
+
+AI가 같은 실수를 반복하는 가장 큰 원인은 **세션 간 컨텍스트 단절**이다.  
+collar는 두 가지 메커니즘으로 이를 해결한다.
+
+```
+패턴 기록 (collar-remember)
+  세션 중 AI가 실수 또는 발견을 감지하면:
+  $ collar-remember "xargs -I{}는 macOS에서 파이프라인 안에서 불안정"
+  
+  → LLM이 자동 판단:
+    confidence ≥ 8점  →  글로벌 CLAUDE.md에 자동 추가 (모든 프로젝트 방지)
+    confidence 5~7점  →  사용자 확인 후 추가 [y/e/v/N]
+    confidence < 5점  →  프로젝트 memory.md에만 기록
+
+세션 컨텍스트 압축 (collar-compact / collar-watchdog)
+  세션이 길어지면 (ctx 60%+):
+  → memory.md + CLAUDE.md 핵심만 추출 → session-compact.md 저장
+  → 다음 세션 시작 시 이것만 로드 → 토큰 절약 + 맥락 유지
+
+결과:
+  - 같은 실수 → 두 번 다시 발생하지 않는다
+  - 각 프로젝트의 특수 규칙이 세션마다 자동 로드된다
+  - 글로벌 패턴은 모든 프로젝트에서 자동 적용된다
+```
+
+---
+
+## 현재 기술 의존성 및 로드맵
+
+**현재 (v1~v2):** collar는 일부 기능에서 외부 도구 위에서 동작한다.
+
+| 기능 | 현재 의존 | 이유 |
+|------|---------|------|
+| 세션 모니터링 | gstack, OMC | 훅 오케스트레이션, 스킬 시스템 |
+| 모델 라우팅 | OMC (oh-my-claudecode) | opus/sonnet/haiku 자동 선택 |
+| 에이전트 팀 | OMC `Team` | 병렬 에이전트 실행 |
+
+**향후 비전 (v3+):** 외부 도구 의존 없이 Claude Code 기본 기능만으로 독립 동작.
+
+```
+현재:  collar → gstack/OMC → Claude Code
+목표:  collar → Claude Code (직접)
+
+로드맵:
+  - collar-watchdog: Claude Code 기본 훅만으로 완전 자율화 ← 진행 중
+  - collar-github:   Claude API 직접 호출 + gh CLI           ← 진행 중
+  - collar-team:     Claude Code Agent Teams API 직접 활용  ← 계획
+  - 글로벌 설치:     npm/brew 패키지로 배포                  ← 계획
+```
+
+gstack/OMC가 없는 환경에서도 core 기능(collar-init, collar-watchdog, collar-github)은 이미 독립적으로 동작한다.
+
+---
+
 ## 빠른 시작
 
 ```bash
