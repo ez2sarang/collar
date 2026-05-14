@@ -50,15 +50,20 @@ $ collar-github setup          # GitHub 연동 (선택)
 
 2단계: 인터뷰 (~5~10분, 최초 1회)
 ────────────────────────────────────────────
-$ collar-interview             # 대화형 인터뷰 → 프로젝트 맞춤 CLAUDE.md 생성
+$ collar-interview             # standard 모드 (기본값)
+$ collar-interview --deep      # 고강도: 82% 명확성 + pressure pass 필수
+$ collar-interview --quick     # scoring 없이 7문만
+$ collar-interview --dry-run   # 구조 검증용 미리보기
 
-  7개 질문으로 프로젝트 맞춤 CLAUDE.md 자동 생성:
+  7개 질문 + Ouroboros 명확성 점수 기반 자동 follow-up:
   - 이 프로젝트가 무엇인가? (목적, 사용자)
   - 배포 환경은? (Vercel / AWS / 앱스토어 등)
   - 우선순위는? (기능구현 / 안정성 / 코드품질)
   - AI가 절대 하면 안 되는 것은?
   - 성공 기준과 테스트 명령어는?
 
+  → LLM이 7개 차원을 점수화, 약한 차원에 자동 follow-up 질문
+  → --deep: 가장 취약한 가정에 pressure pass (압박 재질문) 1회 추가
   → 답변 기반 CLAUDE.md 생성 + 인터뷰 기록 doc/ 저장
   → 이후 모든 세션에서 AI가 이 맥락으로 시작한다.
 
@@ -180,7 +185,7 @@ collar-github watch   # 세션 시작마다 이슈 자동 체크
 | 도구 | 역할 |
 |------|------|
 | `collar-init` | 프로젝트 하네스 설치 (CLAUDE.md + AGENTS.md + .claude/settings.json) |
-| `collar-interview` | 대화형 인터뷰 (7개 질문) → 프로젝트 맞춤 CLAUDE.md 생성 |
+| `collar-interview` | 대화형 인터뷰 (7문 + Ouroboros 명확성 점수 + follow-up) → 프로젝트 맞춤 CLAUDE.md 생성 (`--quick/--standard/--deep`) |
 | `collar-watchdog` | ctx% 모니터링 훅 설치 → 60% 초과 시 자동 compact |
 | `collar-compact` | 세션 컨텍스트 압축 → `.collar/session-compact.md` |
 | `collar-remember` | 발견한 패턴 기록 → LLM이 전역 승격 여부 자동 판단 |
