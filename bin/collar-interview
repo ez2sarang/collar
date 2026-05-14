@@ -51,8 +51,9 @@ LLM_USED=""
 run_llm() {
   local prompt="$1"
   local output=""
+  # </dev/null: LLM 프로세스가 사용자 stdin을 소비하지 않도록 격리
   if command -v claude >/dev/null 2>&1 || [ -x "$CLAUDE_BIN" ]; then
-    output="$("$CLAUDE_BIN" -p "$prompt" 2>/dev/null)" && LLM_USED="claude" && echo "$output" && return
+    output="$("$CLAUDE_BIN" -p "$prompt" </dev/null 2>/dev/null)" && LLM_USED="claude" && echo "$output" && return
   fi
   if [ -z "$output" ] && command -v gemini >/dev/null 2>&1; then
     output="$(echo "$prompt" | gemini -p --approval-mode yolo 2>/dev/null)" && LLM_USED="gemini" && echo "$output" && return
