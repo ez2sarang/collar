@@ -94,6 +94,30 @@ p.write_text(json.dumps(d, indent=2, ensure_ascii=False))
 " 2>/dev/null || true
 
   touch "$PROCESSED_LOG"
+
+  # ANTHROPIC_API_KEY 설정 (버그 자동수정에 필요)
+  echo ""
+  if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+    STORED_KEY="$(security find-generic-password -s "collar-github-anthropic-key" -w 2>/dev/null || true)"
+    if [ -z "$STORED_KEY" ]; then
+      echo "ANTHROPIC_API_KEY가 설정되어 있지 않습니다 (버그 자동 수정에 필요)."
+      echo "Anthropic API 키를 입력하세요 (없으면 Enter로 건너뜀):"
+      read -rs API_KEY_INPUT
+      if [ -n "$API_KEY_INPUT" ]; then
+        security add-generic-password -s "collar-github-anthropic-key" \
+          -a "collar-github" -w "$API_KEY_INPUT" 2>/dev/null || \
+          echo "export ANTHROPIC_API_KEY=$API_KEY_INPUT" >> "$HOME/.zshrc"
+        echo "✅ API 키 저장 완료 (Keychain)"
+      else
+        echo "⚠️  API 키 없음. 버그 자동수정은 ANTHROPIC_API_KEY 환경변수 필요."
+      fi
+    else
+      echo "✅ API 키 이미 저장됨 (Keychain)"
+    fi
+  else
+    echo "✅ ANTHROPIC_API_KEY 환경변수 감지됨"
+  fi
+
   echo ""
   echo "✅ collar-github 설정 완료: $REPO_SLUG (레벨 $AUTO_LEVEL)"
   echo ""
@@ -237,57 +261,179 @@ for issue in issues:
         continue
 
     if kind == "bug" and auto_level >= 2:
-        # ── bug: 분석 + 수정 PR ─────────────────────────────────
-        print(f"       → 버그 분석 시작...")
-        comment_start = f"🤖 collar-github: 버그 자동 분석 중입니다. 잠시 후 PR을 생성합니다."
-        run(f'gh issue comment {num} --repo {repo} --body "{comment_start}"')
+        # ── bug: Anthropic API 직접 호출 → 수정 → PR ────────────
+        print(f"       → 버그 분석 시작 (Anthropic API)...")
+        run(f'gh issue comment {num} --repo {repo} --body "🤖 collar-github: 버그 자동 분석 중입니다. 잠시 후 PR을 생성합니다."')
 
-        # Claude에게 수정 위임 (서브프로세스로 collar agent 실행)
-        fix_prompt = f"""GitHub 이슈 #{num}을 수정하세요:
-제목: {title}
-내용: {body[:500]}
+        try:
+            import glob as _glob
 
-작업:
-1. 관련 코드 파일 찾기
-2. 버그 원인 파악
-3. 최소한의 수정으로 버그 수정
-4. 수정 내용 설명
+            # 관련 파일 수집 (이슈 키워드로 grep, 최대 5개)
+            keywords = [w for w in (title + " " + body).split() if len(w) > 4][:5]
+            candidate_files = set()
+            for kw in keywords:
+                r = run(f'grep -rl "{kw}" "{project_dir}" --include="*.sh" --include="*.py" --include="*.js" --include="*.ts" --include="*.go" --include="*.rs" 2>/dev/null | head -3')
+                candidate_files.update(r.stdout.strip().splitlines())
+            if not candidate_files:
+                candidate_files = set(_glob.glob(os.path.join(project_dir, "bin", "*")) +
+                                      _glob.glob(os.path.join(project_dir, "templates", "*.sh")))
 
-수정 완료 후 아래 형식으로 출력:
-FIX_SUMMARY: [한 줄 수정 요약]
-FILES_CHANGED: [변경된 파일 목록]
+            file_context = ""
+            for fp in list(candidate_files)[:5]:
+                try:
+                    content = pathlib.Path(fp).read_text(errors="replace")
+                    rel = os.path.relpath(fp, project_dir)
+                    file_context += f"\n\n### {rel}\n```\n" + "\n".join(content.splitlines()[:120]) + "\n```"
+                except Exception:
+                    pass
+
+            prompt_text = f"""중요: 도구 사용 금지. 파일 쓰기 금지. 텍스트만 출력.
+
+GitHub 이슈 #{num}의 버그를 분석하고 수정 내용을 아래 형식으로만 출력하라.
+
+이슈 제목: {title}
+이슈 내용:
+{body[:800]}
+
+관련 파일:
+{file_context[:6000]}
+
+출력 형식 (반드시 이 형식을 정확히 따를 것):
+
+FIX_SUMMARY: 한 줄 수정 요약
+
+FILE_CHANGE: 파일의_상대경로
+<<<ORIGINAL
+(수정 전 코드 블록 — 파일에 실제로 존재하는 코드를 그대로 복사)
+>>>
+<<<NEW
+(수정 후 코드 블록)
+>>>
+
+규칙:
+- FIX_SUMMARY는 반드시 첫 번째 줄에 출력
+- FILE_CHANGE 블록을 수정 파일 수만큼 반복
+- <<<ORIGINAL과 >>> 사이에 수정 전 코드를 그대로 넣을 것 (설명 금지)
+- <<<NEW와 >>> 사이에 수정 후 코드를 넣을 것
+- 수정 불가 시: FIX_SUMMARY: CANNOT_FIX
+- 다른 텍스트, 설명, 마크다운 금지. 위 형식만 출력.
 """
-        fix_result = run(
-            f'cd "{project_dir}" && echo {json.dumps(fix_prompt)!r} | claude -p 2>/dev/null',
-            timeout=120
-        )
 
-        if fix_result.returncode == 0 and "FIX_SUMMARY:" in fix_result.stdout:
-            # 브랜치 생성 + PR 요청
-            branch = f"collar/fix-issue-{num}"
-            run(f'cd "{project_dir}" && git checkout -b {branch} 2>/dev/null || git checkout {branch}')
-            run(f'cd "{project_dir}" && git add -A && git commit -m "fix: #{num} {title[:50]}" 2>/dev/null || true')
-            run(f'cd "{project_dir}" && git push -u origin {branch} 2>/dev/null || true')
+            # ── API 호출: Anthropic SDK 우선, claude CLI 폴백 ──────
+            api_output = None
 
-            summary_line = [l for l in fix_result.stdout.splitlines() if l.startswith("FIX_SUMMARY:")]
-            summary = summary_line[0].replace("FIX_SUMMARY:","").strip() if summary_line else "자동 수정"
+            # 1순위: 환경변수 → Keychain 순으로 API 키 탐색
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            if not api_key:
+                r_key = subprocess.run(
+                    ["security", "find-generic-password", "-s", "collar-github-anthropic-key", "-w"],
+                    capture_output=True, text=True
+                )
+                api_key = r_key.stdout.strip() if r_key.returncode == 0 else ""
+            if api_key:
+                import anthropic as _anthropic
+                client = _anthropic.Anthropic(api_key=api_key)
+                resp = client.messages.create(
+                    model="claude-sonnet-4-6",
+                    max_tokens=4096,
+                    messages=[{"role": "user", "content": prompt_text}]
+                )
+                api_output = resp.content[0].text
 
-            pr_body = f"Fixes #{num}\n\n자동 생성 PR by collar-github\n\n수정 내용: {summary}"
-            pr_result = run(f'gh pr create --repo {repo} --base main --head {branch} --title "fix: {title[:60]}" --body "{pr_body}" 2>/dev/null')
+            # 2순위: claude 바이너리 직접 호출 (shell function 우회)
+            if not api_output:
+                import glob as _glob2, shutil
+                # 실제 바이너리 경로 탐색 (shell function 건너뜀)
+                candidates = [
+                    "/opt/homebrew/bin/claude",
+                    "/usr/local/bin/claude",
+                ] + _glob2.glob(os.path.expanduser("~/.nvm/versions/node/*/bin/claude")) \
+                  + _glob2.glob(os.path.expanduser("~/.local/share/fnm/node-versions/*/installation/bin/claude"))
+                claude_bin = next((p for p in candidates if os.path.isfile(p)), None)
 
-            if pr_result.returncode == 0:
-                pr_url = pr_result.stdout.strip()
-                run(f'gh issue comment {num} --repo {repo} --body "✅ 수정 PR 생성: {pr_url}"')
-                log_path.open("a").write(f"{ts} #{num} bug-fixed PR={pr_url}: {title[:60]}\n")
-                print(f"       → PR 생성: {pr_url}")
-            else:
-                log_path.open("a").write(f"{ts} #{num} bug-pr-failed: {title[:60]}\n")
-                print(f"       → PR 생성 실패. 수동 처리 필요.")
-        else:
-            comment_fail = "🤖 collar-github: 자동 수정에 실패했습니다. 수동 검토 필요합니다."
-            run(f'gh issue comment {num} --repo {repo} --body "{comment_fail}"')
+                if claude_bin:
+                    r = subprocess.run(
+                        [claude_bin, "-p"],
+                        input=prompt_text, capture_output=True, text=True, timeout=120
+                    )
+                    if r.returncode == 0 and r.stdout.strip():
+                        api_output = r.stdout
+
+            if not api_output:
+                raise RuntimeError("API 키 없음 + claude CLI 실패. ANTHROPIC_API_KEY 환경변수를 설정하거나 claude CLI를 인증하세요.")
+
+        except Exception as e:
+            api_output = f"FIX_SUMMARY: CANNOT_FIX\n오류: {e}"
+
+        # API 응답 디버그 저장
+        debug_log = log_path.parent / f"github-debug-{num}.txt"
+        debug_log.write_text(api_output)
+
+        # FIX_SUMMARY 추출
+        summary = "자동 수정"
+        for line in api_output.splitlines():
+            if line.startswith("FIX_SUMMARY:"):
+                summary = line.replace("FIX_SUMMARY:", "").strip()
+                break
+
+        if "CANNOT_FIX" in summary or not summary:
+            run(f'gh issue comment {num} --repo {repo} --body "🤖 collar-github: 자동 수정에 실패했습니다 — {summary}. 수동 검토 필요합니다."')
             log_path.open("a").write(f"{ts} #{num} bug-fix-failed: {title[:60]}\n")
-            print(f"       → 자동 수정 실패. 이슈에 댓글 등록.")
+            print(f"       → 자동 수정 불가: {summary}")
+        else:
+            # FILE_CHANGE 블록 파싱 + 적용
+            import re as _re
+            # <<<ORIGINAL ... >>> ... <<<NEW ... >>> 형식 파싱 (앞뒤 공백 허용)
+            pattern = _re.compile(
+                r'FILE_CHANGE:\s*(\S+)\s*\n'
+                r'<<<ORIGINAL\s*\n(.*?)\n?>>>\s*\n'
+                r'<<<NEW\s*\n(.*?)\n?>>>',
+                _re.DOTALL
+            )
+            changes = pattern.findall(api_output)
+            applied = []
+
+            for rel_path, original, new_code in changes:
+                rel_path = rel_path.strip()
+                abs_path = os.path.join(project_dir, rel_path)
+                try:
+                    current = pathlib.Path(abs_path).read_text()
+                    if original.strip() in current:
+                        updated = current.replace(original.strip(), new_code.strip(), 1)
+                        pathlib.Path(abs_path).write_text(updated)
+                        applied.append(rel_path)
+                        print(f"       → 파일 수정: {rel_path}")
+                    else:
+                        print(f"       → 패턴 불일치, 건너뜀: {rel_path}")
+                except Exception as e:
+                    print(f"       → 파일 적용 오류 ({rel_path}): {e}")
+
+            if applied:
+                branch = f"collar/fix-issue-{num}"
+                run(f'cd "{project_dir}" && git checkout -b {branch} 2>/dev/null || git checkout {branch} 2>/dev/null')
+                run(f'cd "{project_dir}" && git add ' + " ".join(f'"{p}"' for p in applied))
+                run(f'cd "{project_dir}" && git commit -m "fix: #{num} {title[:50]}\n\nAuto-fix by collar-github\n\n{summary}"')
+                push_r = run(f'cd "{project_dir}" && git push -u origin {branch} 2>&1')
+                run(f'cd "{project_dir}" && git checkout main 2>/dev/null || git checkout - 2>/dev/null')
+
+                if push_r.returncode == 0:
+                    pr_body = f"Fixes #{num}\n\n🤖 자동 생성 PR by collar-github\n\n**수정 내용:** {summary}\n\n**변경 파일:** {', '.join(applied)}"
+                    pr_r = run(f'gh pr create --repo {repo} --base main --head {branch} --title "fix: {title[:60]}" --body "{pr_body}" 2>/dev/null')
+                    if pr_r.returncode == 0:
+                        pr_url = pr_r.stdout.strip()
+                        run(f'gh issue comment {num} --repo {repo} --body "✅ 수정 PR 생성: {pr_url}\n\n수정 내용: {summary}"')
+                        log_path.open("a").write(f"{ts} #{num} bug-fixed PR={pr_url}: {title[:60]}\n")
+                        print(f"       → PR 생성: {pr_url}")
+                    else:
+                        log_path.open("a").write(f"{ts} #{num} bug-pr-failed: {title[:60]}\n")
+                        print(f"       → PR 생성 실패 (push 됨): {push_r.stderr[:100]}")
+                else:
+                    log_path.open("a").write(f"{ts} #{num} bug-push-failed: {title[:60]}\n")
+                    print(f"       → push 실패: {push_r.stderr[:100]}")
+            else:
+                run(f'gh issue comment {num} --repo {repo} --body "🤖 collar-github: 분석 완료했으나 적용 가능한 수정이 없습니다. 수동 검토 필요합니다.\n\nAPI 분석: {summary}"')
+                log_path.open("a").write(f"{ts} #{num} bug-no-change: {title[:60]}\n")
+                print(f"       → 분석 완료, 적용 가능한 변경 없음")
 
     elif kind == "feature" and auto_level >= 3:
         # ── feature: 로드맵 기록 ────────────────────────────────
