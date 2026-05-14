@@ -31,18 +31,29 @@ collar/
 ├── README.md              # 사용자용 퀵스타트
 ├── bin/
 │   ├── collar-init        # 프로젝트 하네스 설치 스크립트
+│   ├── collar-interview   # 대화형 인터뷰 → 프로젝트 맞춤 CLAUDE.md 생성
+│   ├── collar-watchdog    # 컨텍스트 임계값 감시 + 자동 compact
+│   ├── collar-compact     # 세션 컨텍스트 압축 → session-compact.md
 │   ├── collar-remember    # 세션 인사이트 기록 (LLM 글로벌 자동 판단)
 │   ├── collar-update      # CLAUDE.md TODO AI 자동 채우기
-│   └── collar-compact     # 세션 컨텍스트 압축 → session-compact.md
+│   └── collar-github      # GitHub 이슈 자동 분류·처리·PR 생성
 ├── templates/
-│   ├── CLAUDE.md.base     # 모든 프로젝트 공통 헌법 템플릿
-│   └── AGENTS.md.base     # 에이전트 가이드 템플릿
+│   ├── CLAUDE.md.base         # 모든 프로젝트 공통 헌법 템플릿
+│   ├── AGENTS.md.base         # 에이전트 가이드 템플릿
+│   ├── collar-dispatcher.sh   # 이중 훅 Layer 1 라우터
+│   ├── session-monitor.sh     # ctx% 감시 + memory.md 자동 정리
+│   ├── github-check.sh        # 세션 시작 시 GitHub 이슈 체크
+│   └── config.json            # 기본 설정 템플릿
 └── doc/
+    ├── 2026-05-14-architecture-v2.md
     ├── 2026-05-14-harness-system-plan.md
+    ├── 2026-05-14-session-qa.md
+    ├── 2026-05-14-memory-system-design.md
+    ├── 2026-05-14-competitive-analysis.md
     ├── 2026-05-14-frustration-analysis.md
     ├── 2026-05-14-runtime-environment-analysis.md
-    ├── 2026-05-14-glossary.md
-    └── 2026-05-14-session-qa.md
+    ├── 2026-05-14-interview-prep.md
+    └── 2026-05-14-glossary.md
 ```
 
 ---

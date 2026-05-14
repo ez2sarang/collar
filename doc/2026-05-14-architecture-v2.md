@@ -23,21 +23,27 @@
 
 ```
 collar/
-├── 현재 구현 (v1 — 유지)
-│   ├── collar-init          # 프로젝트 하네스 설치
-│   ├── collar-remember      # 인사이트 기록 (LLM 자동 글로벌 판단)
-│   ├── collar-update        # CLAUDE.md TODO 자동 채우기
-│   └── collar-compact       # 세션 컨텍스트 압축
+├── v1 구현 완료
+│   ├── collar-init          # 프로젝트 하네스 설치 (Swift/Kotlin/JS/Python/Rust/Go/bash)
+│   ├── collar-interview     # 대화형 인터뷰 → 프로젝트 맞춤 CLAUDE.md 생성
+│   ├── collar-remember      # 인사이트 기록 (LLM 자동 글로벌 판단, [y/e/v/N])
+│   ├── collar-update        # CLAUDE.md TODO 자동 채우기 (preamble 오염 방지)
+│   └── collar-compact       # 세션 컨텍스트 압축 (haiku 모델)
 │
-├── v2 추가 예정
-│   ├── collar-watchdog      # 세션 상태 모니터링 → 자동 compact/재시작
-│   ├── collar-github        # GitHub 이슈 자동 처리 파이프라인
-│   └── collar-plugin        # 플러그인 인터페이스
+├── v2 구현 완료
+│   ├── collar-watchdog      # 훅 기반 ctx% 감시 + 자동 compact + memory 중복 감지
+│   └── collar-github        # GitHub 이슈 자동 처리 (분류→수정→review→PR)
+│
+├── v3 예정
+│   └── collar-plugin        # 플러그인 인터페이스 (paperClip 연동용)
 │
 └── .collar/                 # 프로젝트별 데이터
-    ├── memory.md            # 학습 기록
+    ├── memory.md            # 학습 기록 (자동 중복 정리)
     ├── session-compact.md   # 압축된 세션 컨텍스트
-    └── config.json          # collar 설정 (임계값, GitHub 설정 등)
+    ├── config.json          # collar 설정 (임계값, GitHub 설정 등)
+    └── hooks/
+        ├── session-monitor.sh   # ctx% 감시 + memory dedup
+        └── github-check.sh      # 세션 시작 시 이슈 자동 체크
 ```
 
 ---
@@ -147,15 +153,15 @@ Claude Code 세션들 (여러 프로젝트 병렬 처리)
 
 ## 7. 구현 우선순위
 
-| 단계 | 항목 | 복잡도 | 가치 |
-|------|------|--------|------|
-| 즉시 | collar-watchdog (hooks 기반) | 중 | 높음 |
-| 단기 | GitHub 연동 (collar-github) | 높음 | 매우 높음 |
-| 중기 | 플러그인 아키텍처 | 중 | 중 |
-| 장기 | PaperCompany UI 연동 | 높음 | 매우 높음 |
-
-**지금 당장 만들 수 있는 것: collar-watchdog (hooks 기반)**  
-Claude Code의 PostToolUse hook으로 메시지 카운터 추적 → 임계값 시 자동 compact.
+| 단계 | 항목 | 상태 |
+|------|------|------|
+| ✅ 완료 | collar-watchdog (hooks 기반, 이중 훅) | 구현 완료 (2026-05-14) |
+| ✅ 완료 | collar-github (Anthropic API 직접 호출) | 구현 완료 (2026-05-14) |
+| ✅ 완료 | collar-interview (대화형 7문 인터뷰) | 구현 완료 (2026-05-15) |
+| ✅ 완료 | watchdog memory.md 자동 dedup | 구현 완료 (2026-05-15) |
+| 🔜 단기 | collar-interview clarity scoring (Ouroboros 패턴) | 미구현 |
+| 🔜 중기 | 플러그인 아키텍처 (collar-plugin) | 미구현 |
+| 🔜 장기 | PaperCompany UI 연동 | 미구현 |
 
 ---
 

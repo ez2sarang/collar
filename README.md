@@ -50,16 +50,20 @@ $ collar-github setup          # GitHub 연동 (선택)
 
 2단계: 인터뷰 (~5~10분, 최초 1회)
 ────────────────────────────────────────────
-$ collar-update                # AI가 CLAUDE.md TODO 자동 채우기
+$ collar-interview             # 대화형 인터뷰 → 프로젝트 맞춤 CLAUDE.md 생성
 
-  Claude Code가 묻는다:
-  - 이 프로젝트가 무엇인가?
-  - 검증 명령어는?
-  - 주요 도메인과 담당 에이전트는?
-  - 지켜야 할 규칙은?
+  7개 질문으로 프로젝트 맞춤 CLAUDE.md 자동 생성:
+  - 이 프로젝트가 무엇인가? (목적, 사용자)
+  - 배포 환경은? (Vercel / AWS / 앱스토어 등)
+  - 우선순위는? (기능구현 / 안정성 / 코드품질)
+  - AI가 절대 하면 안 되는 것은?
+  - 성공 기준과 테스트 명령어는?
 
-  → 답변이 CLAUDE.md에 반영된다.
+  → 답변 기반 CLAUDE.md 생성 + 인터뷰 기록 doc/ 저장
   → 이후 모든 세션에서 AI가 이 맥락으로 시작한다.
+
+$ collar-update                # AI가 CLAUDE.md TODO 항목만 자동 채우기
+                               # (인터뷰 없이 빠르게 TODO만 처리할 때)
 
 3단계: 자동화 (이후 사용자 개입 없음)
 ────────────────────────────────────────────
@@ -176,6 +180,7 @@ collar-github watch   # 세션 시작마다 이슈 자동 체크
 | 도구 | 역할 |
 |------|------|
 | `collar-init` | 프로젝트 하네스 설치 (CLAUDE.md + AGENTS.md + .claude/settings.json) |
+| `collar-interview` | 대화형 인터뷰 (7개 질문) → 프로젝트 맞춤 CLAUDE.md 생성 |
 | `collar-watchdog` | ctx% 모니터링 훅 설치 → 60% 초과 시 자동 compact |
 | `collar-compact` | 세션 컨텍스트 압축 → `.collar/session-compact.md` |
 | `collar-remember` | 발견한 패턴 기록 → LLM이 전역 승격 여부 자동 판단 |
@@ -255,6 +260,7 @@ collar-github watch
 collar/
 ├── bin/
 │   ├── collar-init        프로젝트 하네스 설치
+│   ├── collar-interview   대화형 인터뷰 → 맞춤 CLAUDE.md 생성
 │   ├── collar-watchdog    세션 모니터링 훅 설치
 │   ├── collar-compact     컨텍스트 압축
 │   ├── collar-remember    패턴 기록 + 전역 승격
