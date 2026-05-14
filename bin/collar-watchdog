@@ -75,13 +75,15 @@ import sys, json, pathlib
 path = pathlib.Path(sys.argv[1])
 d = json.loads(path.read_text())
 
-for hook_type in list(d.get("hooks", {}).keys()):
-    d["hooks"][hook_type] = [
-        h for h in d["hooks"][hook_type]
+for event in ("UserPromptSubmit", "PostToolUse"):
+    if event not in d.get("hooks", {}):
+        continue
+    d["hooks"][event] = [
+        h for h in d["hooks"][event]
         if "collar-dispatcher" not in str(h) and "session-monitor" not in str(h)
     ]
-    if not d["hooks"][hook_type]:
-        del d["hooks"][hook_type]
+    if not d["hooks"][event]:
+        del d["hooks"][event]
 
 if not d.get("hooks"):
     del d["hooks"]
