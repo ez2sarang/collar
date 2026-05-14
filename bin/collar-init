@@ -27,6 +27,12 @@ detect_type() {
     echo "rust"
   elif [ -f "$TARGET/go.mod" ]; then
     echo "go"
+  elif [ -f "$TARGET/Package.swift" ] || \
+       find "$TARGET" -maxdepth 1 -name "*.xcodeproj" -o -name "*.xcworkspace" 2>/dev/null | grep -q .; then
+    echo "swift"
+  elif find "$TARGET" -maxdepth 2 -name "*.kt" 2>/dev/null | grep -q . || \
+       [ -f "$TARGET/build.gradle.kts" ] || [ -f "$TARGET/settings.gradle.kts" ]; then
+    echo "kotlin"
   elif [ -f "$TARGET/pom.xml" ] || [ -f "$TARGET/build.gradle" ]; then
     echo "java"
   elif [ -f "$TARGET/Makefile" ] || [ -f "$TARGET/makefile" ]; then
@@ -74,6 +80,20 @@ case "$PROJECT_TYPE" in
     DEV_COMMAND_1="go run ."
     DEV_COMMAND_2="go build -o bin/app ."
     DOMAIN_TABLE="| 비즈니스 로직 | executor | sonnet |"
+    ;;
+  swift)
+    TECH_STACK="Swift"
+    VERIFY_COMMAND="swift build && swift test"
+    DEV_COMMAND_1="swift run"
+    DEV_COMMAND_2="swift build -c release"
+    DOMAIN_TABLE="| 앱 로직 | executor | sonnet |\n| UI (SwiftUI) | designer | sonnet |"
+    ;;
+  kotlin)
+    TECH_STACK="Kotlin"
+    VERIFY_COMMAND="./gradlew test && ./gradlew build"
+    DEV_COMMAND_1="./gradlew run"
+    DEV_COMMAND_2="./gradlew build"
+    DOMAIN_TABLE="| 비즈니스 로직 | executor | sonnet |\n| Android UI | designer | sonnet |"
     ;;
   bash)
     TECH_STACK="Bash / Shell"
