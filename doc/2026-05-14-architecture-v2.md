@@ -22,10 +22,13 @@
 ## 2. 시스템 구조
 
 ```
-collar/
+collar/                      # 레포 (개발 / 배포 원본)
+├── setup.sh                 # 설치 스크립트 → ~/.collar/bin + templates/ 배포
+│
 ├── v1 구현 완료
 │   ├── collar-init          # 프로젝트 하네스 설치 (Swift/Kotlin/JS/Python/Rust/Go/bash)
-│   ├── collar-interview     # 대화형 인터뷰 → 프로젝트 맞춤 CLAUDE.md 생성
+│   ├── collar-interview     # 7문 인터뷰 + Ouroboros clarity scoring → CLAUDE.md 생성
+│   │                        #   --quick / --standard(기본,72%) / --deep(82%+pressure pass)
 │   ├── collar-remember      # 인사이트 기록 (LLM 자동 글로벌 판단, [y/e/v/N])
 │   ├── collar-update        # CLAUDE.md TODO 자동 채우기 (preamble 오염 방지)
 │   └── collar-compact       # 세션 컨텍스트 압축 (haiku 모델)
@@ -37,13 +40,17 @@ collar/
 ├── v3 예정
 │   └── collar-plugin        # 플러그인 인터페이스 (paperClip 연동용)
 │
-└── .collar/                 # 프로젝트별 데이터
-    ├── memory.md            # 학습 기록 (자동 중복 정리)
-    ├── session-compact.md   # 압축된 세션 컨텍스트
-    ├── config.json          # collar 설정 (임계값, GitHub 설정 등)
-    └── hooks/
-        ├── session-monitor.sh   # ctx% 감시 + memory dedup
-        └── github-check.sh      # 세션 시작 시 이슈 자동 체크
+~/.collar/                   # 표준 설치 경로 (setup.sh 가 배포)
+├── bin/                     # 모든 collar-* 실행 파일
+├── templates/               # CLAUDE.md.base, session-monitor.sh 등
+│
+project/.collar/             # 프로젝트별 런타임 데이터 (collar-init 이 생성)
+├── memory.md                # 학습 기록 (자동 중복 정리)
+├── session-compact.md       # 압축된 세션 컨텍스트
+├── config.json              # collar 설정 (임계값, GitHub 설정 등)
+└── hooks/
+    ├── session-monitor.sh   # ctx% 감시 + memory dedup
+    └── github-check.sh      # 세션 시작 시 이슈 자동 체크
 ```
 
 ---

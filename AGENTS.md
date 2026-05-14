@@ -29,9 +29,11 @@ collar/
 ├── CLAUDE.md              # collar 자체 헌법 (이 프로젝트 규칙)
 ├── AGENTS.md              # 이 파일
 ├── README.md              # 사용자용 퀵스타트
+├── setup.sh               # 설치 스크립트 → ~/.collar/bin + templates/ 배포
 ├── bin/
 │   ├── collar-init        # 프로젝트 하네스 설치 스크립트
-│   ├── collar-interview   # 대화형 인터뷰 → 프로젝트 맞춤 CLAUDE.md 생성
+│   ├── collar-interview   # 대화형 인터뷰 + Ouroboros clarity scoring → CLAUDE.md 생성
+│   │                      #   --quick / --standard / --deep / --dry-run
 │   ├── collar-watchdog    # 컨텍스트 임계값 감시 + 자동 compact
 │   ├── collar-compact     # 세션 컨텍스트 압축 → session-compact.md
 │   ├── collar-remember    # 세션 인사이트 기록 (LLM 글로벌 자동 판단)
@@ -62,7 +64,7 @@ collar/
 
 ```sh
 # 설치 (표준)
-./install.sh          # ~/.collar/bin 에 배포 + PATH 등록 안내
+bash setup.sh         # ~/.collar/bin 에 배포 + PATH 등록 안내
 
 # 개발 중 레포에서 직접 실행하려면
 export PATH="$HOME/.collar/bin:$PATH"   # 설치 후
