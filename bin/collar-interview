@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 # collar-interview — 대화형 인터뷰로 프로젝트 맞춤형 CLAUDE.md 생성
-# Ouroboros 패턴: 명확성 점수 기반 추가 질문 (임계값 미달 시 follow-up)
+# Ouroboros 패턴: 명확성 점수 기반 추가 질문 + pressure pass
 #
 # 사용법:
 #   collar-interview [프로젝트-폴더]
-#   collar-interview --quick          # clarity scoring 없이 빠른 모드
-#   collar-interview --dry-run        # 구조 검증만 (실제 질문 없음)
+#   collar-interview --quick      # clarity scoring 없이 빠른 모드
+#   collar-interview --standard   # 기본값 (72%, 2라운드)
+#   collar-interview --deep       # 고강도 (82%, 4라운드 + pressure pass 필수)
+#   collar-interview --dry-run    # 구조 검증만 (실제 질문 없음)
 
 set -euo pipefail
 
@@ -13,12 +15,15 @@ set -euo pipefail
 TARGET="."
 DRY_RUN=false
 QUICK=false
+PROFILE="standard"  # standard | deep
 
 for arg in "$@"; do
   case "$arg" in
-    --dry-run) DRY_RUN=true ;;
-    --quick)   QUICK=true ;;
-    *)         TARGET="$arg" ;;
+    --dry-run)  DRY_RUN=true ;;
+    --quick)    QUICK=true ;;
+    --standard) PROFILE="standard" ;;
+    --deep)     PROFILE="deep" ;;
+    *)          TARGET="$arg" ;;
   esac
 done
 
@@ -26,9 +31,16 @@ TARGET="$(cd "$TARGET" && pwd)"
 PROJECT_NAME="$(basename "$TARGET")"
 CLAUDE_FILE="$TARGET/CLAUDE.md"
 
-# clarity 설정 (Ouroboros 패턴)
-CLARITY_THRESHOLD=72   # % 이상이면 충분히 명확 (0-100)
-MAX_FOLLOWUP_ROUNDS=2  # 최대 추가 질문 라운드
+# clarity 설정 (Ouroboros 패턴) — 프로파일별 임계값
+if [ "$PROFILE" = "deep" ]; then
+  CLARITY_THRESHOLD=82   # deep: 고강도, 더 엄격
+  MAX_FOLLOWUP_ROUNDS=4
+  PRESSURE_PASS=true     # 가정 압박 재질문 필수
+else
+  CLARITY_THRESHOLD=72   # standard: 기본
+  MAX_FOLLOWUP_ROUNDS=2
+  PRESSURE_PASS=false    # standard에서는 선택
+fi
 
 echo "🎙️  collar-interview: $PROJECT_NAME"
 
@@ -85,7 +97,11 @@ elif [ "$QUICK" = "true" ]; then
   ask "6️⃣  성공 기준은?" Q_DONE
   ask "7️⃣  빌드/테스트 명령어는?" Q_TEST "없음"
 else
-  echo "   Ouroboros 모드: 명확성 점수 기반 추가 질문 (목표 ${CLARITY_THRESHOLD}% 이상)"
+  if [ "$PROFILE" = "deep" ]; then
+    echo "   🔬 Deep 모드: 임계값 ${CLARITY_THRESHOLD}%, 최대 ${MAX_FOLLOWUP_ROUNDS}라운드 + pressure pass 필수"
+  else
+    echo "   📊 Standard 모드: 임계값 ${CLARITY_THRESHOLD}%, 최대 ${MAX_FOLLOWUP_ROUNDS}라운드"
+  fi
   echo "   빠른 모드: collar-interview --quick"
   echo ""
 
@@ -300,6 +316,61 @@ ${answers}
       echo ""
     done <<< "$WEAK_DIMS"
   done
+  # ── Phase 3: Pressure Pass ─────────────────────────────────────────
+  # deep 모드: 필수 / standard 모드: 선택 제안
+  RUN_PRESSURE=false
+  if [ "$PRESSURE_PASS" = "true" ]; then
+    RUN_PRESSURE=true
+  else
+    echo -n "🔬 가정 압박 재질문을 진행할까요? (더 탄탄한 CLAUDE.md) [y/N]: "
+    read -r pp_yn
+    [ "${pp_yn:-N}" = "y" ] || [ "${pp_yn:-N}" = "Y" ] && RUN_PRESSURE=true
+    echo ""
+  fi
+
+  if [ "$RUN_PRESSURE" = "true" ]; then
+    echo "━━━ Phase 3 / Pressure Pass ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "   앞서 답변한 가정 중 가장 취약한 것에 압박 질문을 드립니다."
+    echo ""
+
+    PP_PROMPT="다음 프로젝트 인터뷰 답변을 검토해주세요.
+
+## 답변
+$(current_answers)
+
+## 요청
+답변 중 가장 취약하거나 검증되지 않은 가정 1개를 골라서,
+'만약 그 가정이 틀렸다면?' 식의 압박 질문을 1개만 만들어주세요.
+
+형식: 가정 먼저 1줄로 명시, 그 다음 줄에 질문.
+예시:
+가정: 사용자가 기술에 익숙할 것이다.
+질문: 만약 주 사용자가 비개발자라면, 현재 설계에서 가장 먼저 바꿔야 할 것은 무엇인가요?
+
+질문만 출력 (한국어, 번호/이모지 없이)"
+
+    echo "🤔 가장 취약한 가정 분석 중..."
+    PP_OUTPUT="$(run_llm "$PP_PROMPT" 2>/dev/null || echo "가장 중요하다고 하신 목표가 6개월 후에도 유효할까요? 우선순위가 바뀔 수 있는 상황이 있다면 어떤 건가요?")"
+
+    # 가정 줄과 질문 줄 분리
+    PP_ASSUMPTION="$(echo "$PP_OUTPUT" | grep -i "^가정:" | head -1 | sed 's/^가정: *//')"
+    PP_QUESTION="$(echo "$PP_OUTPUT" | grep -i "^질문:" | head -1 | sed 's/^질문: *//')"
+    # fallback: 가정/질문 파싱 실패 시 전체 출력을 질문으로
+    [ -z "$PP_QUESTION" ] && PP_QUESTION="$PP_OUTPUT"
+
+    [ -n "$PP_ASSUMPTION" ] && echo "💭 검증 대상 가정: $PP_ASSUMPTION"
+    ask "⚡ $PP_QUESTION" PP_ANSWER ""
+
+    if [ -n "$PP_ANSWER" ]; then
+      EXTRA_QA="${EXTRA_QA}
+- [압박 재질문] ${PP_QUESTION}
+- [답변] ${PP_ANSWER}"
+    fi
+    echo ""
+    echo "✅ Pressure Pass 완료."
+    echo ""
+  fi
+
 fi  # end of Ouroboros mode
 
 echo ""
@@ -484,13 +555,13 @@ mkdir -p "$(dirname "$INTERVIEW_FILE")"
   echo "$Q_TEST"
   echo ""
   if [ -n "${EXTRA_QA:-}" ]; then
-    echo "### 추가 답변 (clarity follow-up)"
+    echo "### 추가 답변 (clarity follow-up + pressure pass)"
     echo "$EXTRA_QA"
     echo ""
   fi
   if [ -n "${CURRENT_PCT:-}" ]; then
     echo "### 명확성 최종 점수"
-    echo "${CURRENT_PCT}% (임계값: ${CLARITY_THRESHOLD}%)"
+    echo "프로파일: ${PROFILE:-standard} | ${CURRENT_PCT}% (임계값: ${CLARITY_THRESHOLD}%)"
     echo ""
   fi
   echo "---"
