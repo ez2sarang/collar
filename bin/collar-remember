@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# collar-remember — 세션 중 발견한 패턴/인사이트를 .collar/memory.md에 기록
+# 사용법: collar-remember "발견한 내용"
+#          collar-remember  (대화형 모드)
+
+set -euo pipefail
+
+TARGET="$(pwd)"
+MEMORY_FILE="$TARGET/.collar/memory.md"
+TODAY="$(date +%Y-%m-%d)"
+
+# .collar 디렉토리가 없으면 안내
+if [ ! -d "$TARGET/.collar" ]; then
+  echo "❌ .collar 디렉토리가 없습니다."
+  echo "   먼저 collar-init을 실행하세요."
+  exit 1
+fi
+
+# memory.md가 없으면 생성
+if [ ! -f "$MEMORY_FILE" ]; then
+  PROJECT_NAME="$(basename "$TARGET")"
+  cat > "$MEMORY_FILE" << INIT_EOF
+# Project Memory — $PROJECT_NAME
+마지막 업데이트: $TODAY
+
+---
+
+## 발견된 패턴
+
+## 작업 이력 요약
+
+INIT_EOF
+fi
+
+echo ""
+echo "━━━ collar remember ━━━"
+echo ""
+
+# 발견 내용 (인자 또는 입력)
+if [ $# -gt 0 ]; then
+  DISCOVERY="$*"
+else
+  read -p "발견한 내용: " DISCOVERY
+fi
+
+[ -z "$DISCOVERY" ] && echo "내용이 없습니다." && exit 1
+
+# 제목 (선택)
+read -p "제목 (Enter로 자동 생성): " TITLE
+if [ -z "$TITLE" ]; then
+  TITLE="${DISCOVERY:0:40}"
+  [ ${#DISCOVERY} -gt 40 ] && TITLE="$TITLE..."
+fi
+
+# 맥락 (선택)
+read -p "맥락 (어떤 상황에서? Enter 건너뜀): " CONTEXT
+
+# 적용 (선택)
+read -p "적용 (다음에 어떻게 활용? Enter 건너뜀): " APPLICATION
+
+# memory.md에 추가
+ENTRY="\n### [$TODAY] $TITLE\n**발견:** $DISCOVERY"
+[ -n "$CONTEXT" ] && ENTRY="$ENTRY\n**맥락:** $CONTEXT"
+[ -n "$APPLICATION" ] && ENTRY="$ENTRY\n**적용:** $APPLICATION"
+
+# "## 발견된 패턴" 섹션 뒤에 삽입
+python3 - "$MEMORY_FILE" "$ENTRY" << 'PYEOF'
+import sys, pathlib
+
+memory_path = sys.argv[1]
+entry = sys.argv[2]
+
+content = pathlib.Path(memory_path).read_text()
+
+# "## 발견된 패턴" 이후, 다음 ## 섹션 전에 삽입
+insert_after = "## 발견된 패턴"
+if insert_after in content:
+    pos = content.index(insert_after) + len(insert_after)
+    new_content = content[:pos] + "\n" + entry + "\n" + content[pos:]
+else:
+    new_content = content + "\n" + entry + "\n"
+
+# 마지막 업데이트 날짜 갱신
+import datetime
+today = datetime.date.today().strftime("%Y-%m-%d")
+import re
+new_content = re.sub(r'마지막 업데이트: \d{4}-\d{2}-\d{2}', f'마지막 업데이트: {today}', new_content)
+
+pathlib.Path(memory_path).write_text(new_content)
+print("OK")
+PYEOF
+
+echo ""
+echo "✅ .collar/memory.md에 기록됨"
+echo ""
+
+# ── LLM 자동 판단: 글로벌 적용 가치 평가 ─────────────────────────────
+GLOBAL_MEMORY="$HOME/.claude/collar-memory"
+CLAUDE_BIN="${CLAUDE_PATH:-/opt/homebrew/bin/claude}"
+
+LLM_JUDGE=""
+if command -v claude >/dev/null 2>&1 || [ -x "$CLAUDE_BIN" ]; then
+  JUDGE_PROMPT="다음 인사이트가 특정 프로젝트에만 해당하는지, 모든 프로젝트에 적용 가능한 범용 패턴인지 판단해라.
+제목: $TITLE
+발견: $DISCOVERY
+맥락: $CONTEXT
+적용: $APPLICATION
+
+JSON으로만 응답 (다른 텍스트 없이):
+{\"global\": true/false, \"confidence\": 0-10, \"reason\": \"이유를 한 줄로\"}"
+
+  LLM_JUDGE="$("$CLAUDE_BIN" -p "$JUDGE_PROMPT" 2>/dev/null)" || LLM_JUDGE=""
+fi
+
+# gemini fallback
+if [ -z "$LLM_JUDGE" ] && command -v gemini >/dev/null 2>&1; then
+  LLM_JUDGE="$(echo "$JUDGE_PROMPT" | gemini -p --approval-mode yolo 2>/dev/null)" || LLM_JUDGE=""
+fi
+
+# LLM 응답 파싱
+IS_GLOBAL="False"
+CONFIDENCE=0
+LLM_REASON="LLM 사용 불가"
+
+if [ -n "$LLM_JUDGE" ]; then
+  IS_GLOBAL=$(python3 -c "
+import sys, json, re
+raw = '''$LLM_JUDGE'''
+# JSON 블록만 추출
+m = re.search(r'\{[^}]+\}', raw, re.DOTALL)
+if m:
+    try:
+        d = json.loads(m.group())
+        print(str(d.get('global', False)))
+    except: print('False')
+else: print('False')
+" 2>/dev/null || echo "False")
+
+  CONFIDENCE=$(python3 -c "
+import sys, json, re
+raw = '''$LLM_JUDGE'''
+m = re.search(r'\{[^}]+\}', raw, re.DOTALL)
+if m:
+    try:
+        d = json.loads(m.group())
+        print(int(d.get('confidence', 0)))
+    except: print(0)
+else: print(0)
+" 2>/dev/null || echo "0")
+
+  LLM_REASON=$(python3 -c "
+import sys, json, re
+raw = '''$LLM_JUDGE'''
+m = re.search(r'\{[^}]+\}', raw, re.DOTALL)
+if m:
+    try:
+        d = json.loads(m.group())
+        print(d.get('reason', ''))
+    except: print('')
+else: print('')
+" 2>/dev/null || echo "")
+fi
+
+# ── 자동 판단 분기 ────────────────────────────────────────────────
+GLOBAL_CONFIRM="n"
+GLOBAL_SKIP=false
+
+if [ "$IS_GLOBAL" = "True" ] && [ "$CONFIDENCE" -ge 8 ] 2>/dev/null; then
+  echo "🤖 AI 자동 판단: 글로벌 적용 (신뢰도 $CONFIDENCE/10)"
+  echo "   이유: $LLM_REASON"
+  echo "   → 자동으로 글로벌에 추가합니다."
+  echo ""
+  GLOBAL_CONFIRM="y"
+elif [ "$IS_GLOBAL" = "True" ] && [ "$CONFIDENCE" -ge 5 ] 2>/dev/null; then
+  echo "🤖 AI 권장: 글로벌 적용 가능성 있음 (신뢰도 $CONFIDENCE/10)"
+  echo "   이유: $LLM_REASON"
+  echo ""
+  echo "━━━ 글로벌 승격 체크 ━━━"
+  echo ""
+  echo "  [y] 글로벌(~/.claude/collar-memory/)에도 추가"
+  echo "  [e] 의견/메모 입력 후 추가"
+  echo "  [v] 현재 기록 미리보기"
+  echo "  [n] 이 프로젝트만 (기본)"
+  echo ""
+  read -p "선택 [y/e/v/N]: " GLOBAL_CONFIRM
+else
+  echo "🤖 AI 판단: 이 프로젝트 전용 패턴 (신뢰도 $CONFIDENCE/10)"
+  [ -n "$LLM_REASON" ] && echo "   이유: $LLM_REASON"
+  GLOBAL_SKIP=true
+fi
+
+if [ "$GLOBAL_SKIP" = "true" ]; then
+  echo ""
+  echo "완료."
+  exit 0
+fi
+
+if [ "$GLOBAL_CONFIRM" = "v" ] || [ "$GLOBAL_CONFIRM" = "V" ]; then
+  echo ""
+  echo "── 기록된 내용 ──"
+  echo "제목: $TITLE"
+  echo "발견: $DISCOVERY"
+  [ -n "$CONTEXT" ] && echo "맥락: $CONTEXT"
+  [ -n "$APPLICATION" ] && echo "적용: $APPLICATION"
+  echo "─────────────────"
+  echo ""
+  read -p "글로벌에 추가할까요? [y/e/N]: " GLOBAL_CONFIRM
+fi
+
+GLOBAL_NOTE=""
+if [ "$GLOBAL_CONFIRM" = "e" ] || [ "$GLOBAL_CONFIRM" = "E" ]; then
+  read -p "의견/메모: " GLOBAL_NOTE
+  GLOBAL_CONFIRM="y"
+fi
+
+if [ "$GLOBAL_CONFIRM" = "y" ] || [ "$GLOBAL_CONFIRM" = "Y" ]; then
+  mkdir -p "$GLOBAL_MEMORY"
+  GLOBAL_FILE="$GLOBAL_MEMORY/insights.jsonl"
+  PROJECT_NAME="$(basename "$TARGET")"
+  NOTE_FIELD=""
+  [ -n "$GLOBAL_NOTE" ] && NOTE_FIELD=",\"note\":\"$GLOBAL_NOTE\""
+  echo "{\"date\":\"$TODAY\",\"project\":\"$PROJECT_NAME\",\"title\":\"$TITLE\",\"discovery\":\"$DISCOVERY\",\"context\":\"$CONTEXT\",\"application\":\"$APPLICATION\"$NOTE_FIELD}" >> "$GLOBAL_FILE"
+  echo "✅ 글로벌 인사이트 저장: $GLOBAL_FILE"
+fi
+
+echo ""
+echo "완료."

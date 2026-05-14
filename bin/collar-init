@@ -1,0 +1,328 @@
+#!/usr/bin/env bash
+# collar-init — 프로젝트에 하네스를 설치한다
+# 사용법: collar-init [프로젝트-폴더]
+
+set -euo pipefail
+
+COLLAR_HOME="${COLLAR_HOME:-$HOME/Documents/dev/ai/collar}"
+TARGET="${1:-.}"
+TARGET="$(cd "$TARGET" && pwd)"
+PROJECT_NAME="$(basename "$TARGET")"
+
+echo "🎯 collar-init: $PROJECT_NAME"
+echo "   대상: $TARGET"
+echo ""
+
+# ── 프로젝트 타입 감지 ──────────────────────────────────────────
+detect_type() {
+  if [ -f "$TARGET/package.json" ]; then
+    if grep -q '"next"' "$TARGET/package.json" 2>/dev/null; then echo "nextjs"
+    elif grep -q '"react"' "$TARGET/package.json" 2>/dev/null; then echo "react"
+    elif grep -q '"express"\|"fastify"\|"hono"' "$TARGET/package.json" 2>/dev/null; then echo "nodejs-api"
+    else echo "nodejs"
+    fi
+  elif [ -f "$TARGET/pyproject.toml" ] || [ -f "$TARGET/requirements.txt" ] || [ -f "$TARGET/setup.py" ]; then
+    echo "python"
+  elif [ -f "$TARGET/Cargo.toml" ]; then
+    echo "rust"
+  elif [ -f "$TARGET/go.mod" ]; then
+    echo "go"
+  elif [ -f "$TARGET/pom.xml" ] || [ -f "$TARGET/build.gradle" ]; then
+    echo "java"
+  elif [ -f "$TARGET/Makefile" ] || [ -f "$TARGET/makefile" ]; then
+    echo "bash"
+  elif find "$TARGET" -maxdepth 2 -name "*.sh" 2>/dev/null | grep -q .; then
+    echo "bash"
+  elif [ -d "$TARGET/bin" ] && \
+       find "$TARGET/bin" -maxdepth 1 -type f -not -name ".*" 2>/dev/null | \
+       xargs -I{} head -1 {} 2>/dev/null | grep -q "^#!/.*bash\|^#!/.*sh"; then
+    echo "bash"
+  else
+    echo "generic"
+  fi
+}
+
+PROJECT_TYPE="$(detect_type)"
+echo "📦 프로젝트 타입: $PROJECT_TYPE"
+
+# ── 타입별 설정 ─────────────────────────────────────────────────
+case "$PROJECT_TYPE" in
+  nextjs|react|nodejs*|nodejs)
+    TECH_STACK="Node.js / TypeScript"
+    VERIFY_COMMAND="pnpm typecheck && pnpm test:run && pnpm build"
+    DEV_COMMAND_1="pnpm dev"
+    DEV_COMMAND_2="pnpm build"
+    DOMAIN_TABLE="| UI 컴포넌트/페이지 | frontend | sonnet |\n| API 라우트/서비스 | backend | sonnet |\n| 스키마/마이그레이션 | database | sonnet |"
+    ;;
+  python)
+    TECH_STACK="Python"
+    VERIFY_COMMAND="uv run pytest && uv run mypy ."
+    DEV_COMMAND_1="uv run python -m app"
+    DEV_COMMAND_2="uv build"
+    DOMAIN_TABLE="| 비즈니스 로직 | executor | sonnet |\n| 데이터/DB | database | sonnet |"
+    ;;
+  rust)
+    TECH_STACK="Rust"
+    VERIFY_COMMAND="cargo test && cargo clippy && cargo build --release"
+    DEV_COMMAND_1="cargo run"
+    DEV_COMMAND_2="cargo build --release"
+    DOMAIN_TABLE="| 코어 로직 | executor | sonnet |"
+    ;;
+  go)
+    TECH_STACK="Go"
+    VERIFY_COMMAND="go test ./... && go vet ./... && go build ./..."
+    DEV_COMMAND_1="go run ."
+    DEV_COMMAND_2="go build -o bin/app ."
+    DOMAIN_TABLE="| 비즈니스 로직 | executor | sonnet |"
+    ;;
+  bash)
+    TECH_STACK="Bash / Shell"
+    # 루트 .sh 파일 또는 Makefile 기반
+    MAIN_SCRIPT="$(find "$TARGET" -maxdepth 1 -name "*.sh" | head -1 | xargs basename 2>/dev/null || echo "script.sh")"
+    VERIFY_COMMAND="bash -n bin/*.sh && shellcheck bin/*.sh 2>/dev/null || bash -n $MAIN_SCRIPT"
+    DEV_COMMAND_1="bash $MAIN_SCRIPT"
+    DEV_COMMAND_2="make 2>/dev/null || bash $MAIN_SCRIPT"
+    DOMAIN_TABLE="| 스크립트 로직 (bin/) | executor | sonnet |\n| 템플릿 작성 | executor | sonnet |"
+    ;;
+  *)
+    TECH_STACK="(직접 기입)"
+    VERIFY_COMMAND="# 검증 명령어를 직접 입력하세요"
+    DEV_COMMAND_1="# 실행 명령어"
+    DEV_COMMAND_2="# 빌드 명령어"
+    DOMAIN_TABLE="| 도메인 | 에이전트 | 모델 |"
+    ;;
+esac
+
+# ── 레포 구조 자동 감지 ─────────────────────────────────────────
+REPO_STRUCTURE="$(
+  find "$TARGET" -maxdepth 2 -not -path '*/node_modules/*' \
+    -not -path '*/.git/*' \
+    -not -path '*/__pycache__/*' \
+    -not -path '*/target/*' \
+    -not -name '*.log' \
+    -not -name '.DS_Store' \
+    | sort \
+    | sed "s|$TARGET||" \
+    | sed 's|^/||' \
+    | head -30 \
+    | sed 's|^|  |'
+)"
+
+# ── 템플릿 렌더 함수 (Python으로 멀티라인 처리) ──────────────────
+render_template() {
+  local tmpl="$1"
+  local out="$2"
+  python3 - "$tmpl" "$out" \
+    "$PROJECT_NAME" "$TECH_STACK" "$VERIFY_COMMAND" \
+    "$DEV_COMMAND_1" "$DEV_COMMAND_2" "$REPO_STRUCTURE" << 'PYEOF'
+import sys, pathlib
+
+tmpl_path, out_path = sys.argv[1], sys.argv[2]
+proj, stack, verify, dev1, dev2, repo = sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8]
+
+text = pathlib.Path(tmpl_path).read_text()
+text = text.replace("{{PROJECT_NAME}}", proj)
+text = text.replace("{{PROJECT_DESCRIPTION}}", "TODO: 이 프로젝트가 무엇인지 한 줄로 설명하라.")
+text = text.replace("{{PROJECT_PURPOSE}}", "TODO: 이 프로젝트의 목적을 설명하라.")
+text = text.replace("{{TECH_STACK}}", stack)
+text = text.replace("{{VERIFY_COMMAND}}", verify)
+text = text.replace("{{DEV_COMMAND_1}}", dev1)
+text = text.replace("{{DEV_COMMAND_2}}", dev2)
+text = text.replace("{{REPO_STRUCTURE}}", repo)
+text = text.replace("{{SETUP_COMMANDS}}", dev1)
+text = text.replace("{{DOMAIN_1}}", "도메인 1")
+text = text.replace("{{AGENT_1}}", "executor")
+pathlib.Path(out_path).write_text(text)
+PYEOF
+}
+
+# ── CLAUDE.md 생성 ───────────────────────────────────────────────
+CLAUDE_OUT="$TARGET/CLAUDE.md"
+
+if [ -f "$CLAUDE_OUT" ]; then
+  echo "⚠️  CLAUDE.md 이미 존재. 덮어쓰지 않음."
+  echo "   수동으로 병합하거나 --force 플래그 추가"
+else
+  render_template "$COLLAR_HOME/templates/CLAUDE.md.base" "$CLAUDE_OUT"
+  echo "✅ CLAUDE.md 생성: $CLAUDE_OUT"
+fi
+
+# ── AGENTS.md 생성 ───────────────────────────────────────────────
+AGENTS_OUT="$TARGET/AGENTS.md"
+
+if [ -f "$AGENTS_OUT" ]; then
+  echo "⚠️  AGENTS.md 이미 존재. 건너뜀."
+else
+  render_template "$COLLAR_HOME/templates/AGENTS.md.base" "$AGENTS_OUT"
+  echo "✅ AGENTS.md 생성: $AGENTS_OUT"
+fi
+
+# ── .claude/settings.json (기본) ─────────────────────────────────
+mkdir -p "$TARGET/.claude"
+SETTINGS_OUT="$TARGET/.claude/settings.json"
+
+if [ ! -f "$SETTINGS_OUT" ]; then
+  cat > "$SETTINGS_OUT" << 'EOF'
+{
+  "permissions": {
+    "allow": [
+      "Bash(git *)",
+      "Bash(pnpm *)",
+      "Bash(npm *)",
+      "Bash(uv *)"
+    ],
+    "deny": [
+      "Bash(rm -rf /)",
+      "Bash(curl * | bash)",
+      "Bash(wget * | sh)"
+    ]
+  }
+}
+EOF
+  echo "✅ .claude/settings.json 생성"
+fi
+
+# ── .collar/memory.md (프로젝트 메모리) ─────────────────────────────
+mkdir -p "$TARGET/.collar"
+MEMORY_OUT="$TARGET/.collar/memory.md"
+
+if [ ! -f "$MEMORY_OUT" ]; then
+  cat > "$MEMORY_OUT" << MEMORY_EOF
+# Project Memory — $PROJECT_NAME
+마지막 업데이트: $(date +%Y-%m-%d)
+
+AI가 이 파일을 세션 시작 시 읽는다. 이전 세션에서 배운 것, 반복되는 패턴, 주의사항을 기록한다.
+
+---
+
+## 발견된 패턴
+
+(아직 없음. 작업 중 중요한 것을 발견하면 여기에 추가하거나 \`collar remember "내용"\` 명령 사용)
+
+---
+
+## 작업 이력 요약
+
+(중요한 의사결정, 아키텍처 변경 이력을 간략히 기록)
+
+MEMORY_EOF
+  echo "✅ .collar/memory.md 생성 (프로젝트 메모리)"
+fi
+
+# ── 글로벌 룰 승격 체크 ────────────────────────────────────────────
+GLOBAL_CLAUDE="$HOME/.claude/CLAUDE.md"
+
+if [ -f "$GLOBAL_CLAUDE" ]; then
+  if ! grep -q "STARTED / TESTED / VERIFIED" "$GLOBAL_CLAUDE" 2>/dev/null; then
+    echo ""
+    echo "━━━ 글로벌 룰 승격 체크 ━━━"
+    echo ""
+    echo "다음 규칙들이 모든 프로젝트에 적용되면 유익합니다:"
+    echo "  • 완료 3단계 (STARTED / TESTED / VERIFIED)"
+    echo "  • 모호한 표현 차단 (효율적으로, 잘, 이전처럼 등)"
+    echo "  • 다음 단계 명시 프로토콜"
+    echo "  • 재발 버그 체크"
+    echo ""
+    echo "현재 ~/.claude/CLAUDE.md에 이 규칙들이 없습니다."
+    echo ""
+    if [ -t 0 ]; then
+      echo "  [y] 그대로 추가"
+      echo "  [e] 의견/메모 입력 후 추가 (왜 추가하는지, 수정할 내용 등)"
+      echo "  [v] 추가될 내용 미리보기"
+      echo "  [n] 건너뜀 (기본)"
+      echo ""
+      read -p "선택 [y/e/v/N]: " GLOBAL_CONFIRM
+    else
+      GLOBAL_CONFIRM="n"
+      echo "(비대화형 실행: 글로벌 추가를 건너뜁니다. 직접 실행하려면: collar-init --promote-global)"
+    fi
+
+    # 미리보기
+    if [ "$GLOBAL_CONFIRM" = "v" ] || [ "$GLOBAL_CONFIRM" = "V" ]; then
+      echo ""
+      echo "── 추가될 내용 미리보기 ──────────────────────────────"
+      echo "## collar 하네스 규칙 (모든 프로젝트 공통)"
+      echo ""
+      echo "• 완료 3단계: STARTED / TESTED / VERIFIED"
+      echo "• 모호한 표현 차단: 효율적으로, 잘, 이전처럼, 비슷하게"
+      echo "• 다음 단계 명시: '완료: X / 현재상태: Y / 다음: Z / 진행할까요?'"
+      echo "• 재발 버그 체크: 이전 수정 생존 확인 우선"
+      echo "─────────────────────────────────────────────────────"
+      echo ""
+      read -p "추가할까요? [y/e/N]: " GLOBAL_CONFIRM
+    fi
+
+    # 의견/메모 입력
+    GLOBAL_NOTE=""
+    if [ "$GLOBAL_CONFIRM" = "e" ] || [ "$GLOBAL_CONFIRM" = "E" ]; then
+      echo ""
+      echo "의견/메모를 입력하세요 (글로벌 CLAUDE.md에 주석으로 저장됩니다):"
+      echo "예: '2026-05-14 socialMakeit 좌절 분석 기반으로 추가' / '4번째 규칙은 필요 없다고 생각'"
+      read -p "> " GLOBAL_NOTE
+      GLOBAL_CONFIRM="y"
+    fi
+
+    if [ "$GLOBAL_CONFIRM" = "y" ] || [ "$GLOBAL_CONFIRM" = "Y" ]; then
+      # 메모가 있으면 먼저 추가
+      if [ -n "$GLOBAL_NOTE" ]; then
+        echo "" >> "$GLOBAL_CLAUDE"
+        echo "<!-- collar 승격 메모 ($(date +%Y-%m-%d)): $GLOBAL_NOTE -->" >> "$GLOBAL_CLAUDE"
+      fi
+      cat >> "$GLOBAL_CLAUDE" << 'GLOBAL_RULES_EOF'
+
+## collar 하네스 규칙 (모든 프로젝트 공통)
+
+### 완료 3단계 프로토콜
+
+"완료"를 말하기 전에 반드시 어느 단계인지 명시:
+
+| 단계 | 의미 |
+|------|------|
+| **STARTED** | 코드 변경만, 미검증 |
+| **TESTED** | 로컬 빌드/테스트 통과, UI 확인 |
+| **VERIFIED** | 실제 환경에서 동작 확인 |
+
+STARTED 상태에서 "완료"라고 말하는 것은 금지.
+
+### 모호한 표현 차단
+
+다음 표현이 요구사항에 있으면 코드 전에 구체화 요청:
+- "효율적으로", "잘", "좋게" → 구체적으로 어떻게?
+- "이전처럼", "아까처럼" → 정확히 어느 시점?
+- "비슷하게", "느낌으로" → 실제 예시?
+
+### 다음 단계 명시 프로토콜
+
+작업 완료 후 반드시:
+```
+완료: [무엇을 했는지]
+현재 상태: TESTED
+다음: [구체적인 다음 단계]
+진행할까요?
+```
+
+### 재발 버그 체크
+
+이미 수정했다고 보고한 버그가 다시 보고되면:
+1. 이전 수정이 실제로 적용됐는지 먼저 확인
+2. 수정이 살아있음을 증명
+3. 수정이 사라진 원인 추적 후 보고
+GLOBAL_RULES_EOF
+      echo "✅ 글로벌 규칙 추가 완료: $GLOBAL_CLAUDE"
+    fi
+  else
+    echo ""
+    echo "✅ 글로벌 규칙 이미 반영됨 (~/.claude/CLAUDE.md)"
+  fi
+fi
+
+# ── 완료 ─────────────────────────────────────────────────────────
+echo ""
+echo "🎉 하네스 설치 완료!"
+echo ""
+echo "다음 단계:"
+echo "  1. $CLAUDE_OUT 을 열고 TODO 항목 채우기"
+echo "  2. 실제 검증 명령어 확인: $VERIFY_COMMAND"
+echo "  3. Claude Code 재시작하면 새 하네스 적용"
+echo ""
+echo "팁: 'AI야, CLAUDE.md의 프로젝트 개요와 레포 구조를 실제에 맞게 업데이트해줘'"

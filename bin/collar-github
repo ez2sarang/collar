@@ -1,0 +1,392 @@
+#!/usr/bin/env bash
+# collar-github — GitHub 이슈 자동 처리 파이프라인
+#
+# 동작:
+#   1. GitHub 미처리 이슈 수집
+#   2. LLM이 이슈 분류 (bug / feature / question / skip)
+#   3. bug → 코드 분석 + 수정 PR 자동 생성
+#      feature → 로드맵 기록 (복잡도 낮으면 PR까지)
+#      question → 자동 답변 댓글
+#   4. .collar/github-processed.log에 처리 이력 기록
+#
+# 사용법:
+#   collar-github setup   GitHub 연동 설정 (토큰, 레포)
+#   collar-github run     미처리 이슈 일괄 처리
+#   collar-github status  현재 상태 확인
+#   collar-github watch   SessionStart 훅으로 자동 감시 등록
+
+set -euo pipefail
+
+COLLAR_HOME="${COLLAR_HOME:-$HOME/Documents/dev/ai/collar}"
+TARGET="${COLLAR_GITHUB_TARGET:-$(pwd)}"
+COLLAR_DIR="$TARGET/.collar"
+CONFIG_FILE="$COLLAR_DIR/config.json"
+PROCESSED_LOG="$COLLAR_DIR/github-processed.log"
+GITHUB_CONFIG="$COLLAR_DIR/github.json"
+
+SUBCOMMAND="${1:-help}"
+
+# ── 헬퍼 ──────────────────────────────────────────────────────────
+die() { echo "❌ $*" >&2; exit 1; }
+log()  { echo "[collar-github] $*"; }
+
+require_collar() {
+  [ -d "$COLLAR_DIR" ] || die ".collar 없음. collar-init 먼저 실행하세요."
+}
+
+require_gh() {
+  command -v gh >/dev/null 2>&1 || die "gh CLI 없음. brew install gh 후 gh auth login"
+  gh auth status >/dev/null 2>&1 || die "gh 미인증. 'gh auth login' 실행"
+}
+
+# ── setup ─────────────────────────────────────────────────────────
+cmd_setup() {
+  require_collar
+  require_gh
+
+  echo "🔧 collar-github setup"
+  echo ""
+
+  # 레포 URL 자동 감지
+  REPO_URL="$(git -C "$TARGET" remote get-url origin 2>/dev/null || echo "")"
+  if [ -z "$REPO_URL" ]; then
+    echo "GitHub 레포 URL을 입력하세요 (예: owner/repo):"
+    read -r REPO_SLUG
+  else
+    # https://github.com/owner/repo.git → owner/repo
+    REPO_SLUG="$(echo "$REPO_URL" | sed 's|.*github.com[:/]||' | sed 's|\.git$||')"
+    echo "감지된 레포: $REPO_SLUG"
+    read -p "맞습니까? [Y/n]: " CONFIRM
+    [ "$CONFIRM" = "n" ] || [ "$CONFIRM" = "N" ] && { echo "직접 입력:"; read -r REPO_SLUG; }
+  fi
+
+  # 자동처리 옵션
+  echo ""
+  echo "자동처리 수준 설정:"
+  echo "  [1] 분류만 (이슈에 라벨 + 댓글) — 안전"
+  echo "  [2] 분류 + bug 자동 수정 PR — 권장"
+  echo "  [3] 분류 + bug 수정 + feature PR (단순한 것만) — 공격적"
+  read -p "선택 [1/2/3, 기본 2]: " AUTO_LEVEL
+  AUTO_LEVEL="${AUTO_LEVEL:-2}"
+
+  # github.json 저장
+  python3 -c "
+import json, pathlib, datetime
+cfg = {
+    'repo': '$REPO_SLUG',
+    'auto_level': int('$AUTO_LEVEL'),
+    'enabled': True,
+    'setup_at': '$(date +%Y-%m-%dT%H:%M:%S)',
+    'watch_on_session': True
+}
+pathlib.Path('$GITHUB_CONFIG').write_text(json.dumps(cfg, indent=2))
+print('OK')
+"
+  # config.json의 github.enabled 갱신
+  python3 -c "
+import json, pathlib
+p = pathlib.Path('$CONFIG_FILE')
+d = json.loads(p.read_text())
+d['github']['enabled'] = True
+d['github']['repo'] = '$REPO_SLUG'
+d['github']['auto_level'] = int('$AUTO_LEVEL')
+p.write_text(json.dumps(d, indent=2, ensure_ascii=False))
+" 2>/dev/null || true
+
+  touch "$PROCESSED_LOG"
+  echo ""
+  echo "✅ collar-github 설정 완료: $REPO_SLUG (레벨 $AUTO_LEVEL)"
+  echo ""
+  echo "실행: collar-github run"
+  echo "자동 감시 등록: collar-github watch"
+}
+
+# ── status ────────────────────────────────────────────────────────
+cmd_status() {
+  require_collar
+  echo "── collar-github 상태 ──"
+  if [ -f "$GITHUB_CONFIG" ]; then
+    python3 -c "
+import json, pathlib
+cfg = json.loads(pathlib.Path('$GITHUB_CONFIG').read_text())
+print('  레포:      ' + cfg.get('repo', '미설정'))
+print('  자동처리:  레벨 ' + str(cfg.get('auto_level', 0)))
+print('  활성화:    ' + ('✅' if cfg.get('enabled') else '❌'))
+print('  설정일:    ' + cfg.get('setup_at', '?'))
+"
+  else
+    echo "  ❌ 미설정. collar-github setup 실행"
+  fi
+  echo ""
+  if [ -f "$PROCESSED_LOG" ]; then
+    COUNT=$(wc -l < "$PROCESSED_LOG" | tr -d ' ')
+    echo "  처리 이력: ${COUNT}건"
+    [ "$COUNT" -gt 0 ] && tail -5 "$PROCESSED_LOG" | sed 's/^/    /'
+  fi
+}
+
+# ── run ───────────────────────────────────────────────────────────
+cmd_run() {
+  require_collar
+  require_gh
+
+  [ -f "$GITHUB_CONFIG" ] || die "설정 없음. collar-github setup 먼저 실행"
+  REPO="$(python3 -c "import json,pathlib; print(json.loads(pathlib.Path('$GITHUB_CONFIG').read_text()).get('repo',''))")"
+  AUTO_LEVEL="$(python3 -c "import json,pathlib; print(json.loads(pathlib.Path('$GITHUB_CONFIG').read_text()).get('auto_level',2))")"
+  [ -z "$REPO" ] && die "레포 미설정. collar-github setup 재실행"
+
+  echo "🔍 collar-github run: $REPO (레벨 $AUTO_LEVEL)"
+  echo ""
+
+  # 처리된 이슈 번호 목록
+  touch "$PROCESSED_LOG"
+  PROCESSED_IDS="$(grep -oE '#[0-9]+' "$PROCESSED_LOG" 2>/dev/null | tr -d '#' | sort -u || true)"
+
+  # 미처리 이슈 수집
+  ISSUES="$(gh issue list --repo "$REPO" --state open --json number,title,body,labels \
+    --limit 20 2>/dev/null || echo "[]")"
+
+  ISSUE_COUNT="$(echo "$ISSUES" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))")"
+  echo "📋 열린 이슈: ${ISSUE_COUNT}건"
+  echo ""
+
+  if [ "$ISSUE_COUNT" = "0" ]; then
+    echo "처리할 이슈 없음."
+    exit 0
+  fi
+
+  # 이슈별 처리
+  echo "$ISSUES" | python3 - "$REPO" "$AUTO_LEVEL" "$PROCESSED_LOG" "$PROCESSED_IDS" "$TARGET" "$COLLAR_HOME" << 'PYEOF'
+import sys, json, subprocess, pathlib, datetime, os
+
+repo = sys.argv[1]
+auto_level = int(sys.argv[2])
+log_path = pathlib.Path(sys.argv[3])
+processed_str = sys.argv[4]
+project_dir = sys.argv[5]
+collar_home = sys.argv[6]
+
+issues = json.load(sys.stdin)
+processed = set(processed_str.split()) if processed_str else set()
+
+def run(cmd, **kw):
+    return subprocess.run(cmd, shell=True, capture_output=True, text=True, **kw)
+
+def classify_issue(title, body, labels):
+    label_names = [l.get("name","").lower() for l in labels]
+    text = (title + " " + body).lower()
+
+    if any(l in label_names for l in ["bug", "fix", "error"]):
+        return "bug"
+    if any(l in label_names for l in ["feature", "enhancement", "feat"]):
+        return "feature"
+    if any(l in label_names for l in ["question", "help wanted"]):
+        return "question"
+
+    # 텍스트 기반 분류
+    bug_words = ["bug", "오류", "에러", "error", "crash", "fail", "broken", "wrong", "fix", "수정"]
+    feature_words = ["feature", "기능", "추가", "add", "implement", "want", "would like", "could", "request"]
+    question_words = ["how", "어떻게", "why", "왜", "question", "help", "confused", "unclear"]
+
+    bug_score    = sum(1 for w in bug_words     if w in text)
+    feature_score = sum(1 for w in feature_words if w in text)
+    question_score = sum(1 for w in question_words if w in text)
+
+    if bug_score >= feature_score and bug_score >= question_score:
+        return "bug" if bug_score > 0 else "skip"
+    if feature_score >= question_score:
+        return "feature"
+    return "question"
+
+for issue in issues:
+    num   = str(issue["number"])
+    title = issue["title"]
+    body  = issue.get("body","") or ""
+    labels = issue.get("labels",[])
+
+    if num in processed:
+        print(f"  #{num} [{title[:40]}] → 이미 처리됨. 건너뜀.")
+        continue
+
+    kind = classify_issue(title, body, labels)
+    ts   = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    print(f"\n  #{num} [{title[:50]}]")
+    print(f"       분류: {kind}")
+
+    if kind == "skip":
+        print(f"       → 처리 불필요. 건너뜀.")
+        log_path.open("a").write(f"{ts} #{num} skip: {title[:60]}\n")
+        continue
+
+    # ── 라벨 자동 적용 ──────────────────────────────────────────
+    label_map = {"bug": "bug", "feature": "enhancement", "question": "question"}
+    run(f'gh issue edit {num} --repo {repo} --add-label "{label_map[kind]}" 2>/dev/null')
+
+    # ── 분류 댓글 ────────────────────────────────────────────────
+    if kind == "question":
+        comment = f"👋 collar-github: 질문으로 분류했습니다. 담당자가 확인 후 답변할 예정입니다."
+        run(f'gh issue comment {num} --repo {repo} --body "{comment}"')
+        log_path.open("a").write(f"{ts} #{num} question: {title[:60]}\n")
+        print(f"       → 질문 댓글 등록")
+        continue
+
+    if kind == "bug" and auto_level >= 2:
+        # ── bug: 분석 + 수정 PR ─────────────────────────────────
+        print(f"       → 버그 분석 시작...")
+        comment_start = f"🤖 collar-github: 버그 자동 분석 중입니다. 잠시 후 PR을 생성합니다."
+        run(f'gh issue comment {num} --repo {repo} --body "{comment_start}"')
+
+        # Claude에게 수정 위임 (서브프로세스로 collar agent 실행)
+        fix_prompt = f"""GitHub 이슈 #{num}을 수정하세요:
+제목: {title}
+내용: {body[:500]}
+
+작업:
+1. 관련 코드 파일 찾기
+2. 버그 원인 파악
+3. 최소한의 수정으로 버그 수정
+4. 수정 내용 설명
+
+수정 완료 후 아래 형식으로 출력:
+FIX_SUMMARY: [한 줄 수정 요약]
+FILES_CHANGED: [변경된 파일 목록]
+"""
+        fix_result = run(
+            f'cd "{project_dir}" && echo {json.dumps(fix_prompt)!r} | claude -p 2>/dev/null',
+            timeout=120
+        )
+
+        if fix_result.returncode == 0 and "FIX_SUMMARY:" in fix_result.stdout:
+            # 브랜치 생성 + PR 요청
+            branch = f"collar/fix-issue-{num}"
+            run(f'cd "{project_dir}" && git checkout -b {branch} 2>/dev/null || git checkout {branch}')
+            run(f'cd "{project_dir}" && git add -A && git commit -m "fix: #{num} {title[:50]}" 2>/dev/null || true')
+            run(f'cd "{project_dir}" && git push -u origin {branch} 2>/dev/null || true')
+
+            summary_line = [l for l in fix_result.stdout.splitlines() if l.startswith("FIX_SUMMARY:")]
+            summary = summary_line[0].replace("FIX_SUMMARY:","").strip() if summary_line else "자동 수정"
+
+            pr_body = f"Fixes #{num}\n\n자동 생성 PR by collar-github\n\n수정 내용: {summary}"
+            pr_result = run(f'gh pr create --repo {repo} --base main --head {branch} --title "fix: {title[:60]}" --body "{pr_body}" 2>/dev/null')
+
+            if pr_result.returncode == 0:
+                pr_url = pr_result.stdout.strip()
+                run(f'gh issue comment {num} --repo {repo} --body "✅ 수정 PR 생성: {pr_url}"')
+                log_path.open("a").write(f"{ts} #{num} bug-fixed PR={pr_url}: {title[:60]}\n")
+                print(f"       → PR 생성: {pr_url}")
+            else:
+                log_path.open("a").write(f"{ts} #{num} bug-pr-failed: {title[:60]}\n")
+                print(f"       → PR 생성 실패. 수동 처리 필요.")
+        else:
+            comment_fail = "🤖 collar-github: 자동 수정에 실패했습니다. 수동 검토 필요합니다."
+            run(f'gh issue comment {num} --repo {repo} --body "{comment_fail}"')
+            log_path.open("a").write(f"{ts} #{num} bug-fix-failed: {title[:60]}\n")
+            print(f"       → 자동 수정 실패. 이슈에 댓글 등록.")
+
+    elif kind == "feature" and auto_level >= 3:
+        # ── feature: 로드맵 기록 ────────────────────────────────
+        roadmap = pathlib.Path(project_dir) / ".collar" / "roadmap.md"
+        with roadmap.open("a") as f:
+            f.write(f"\n- [ ] #{num}: {title} (자동 추가 {ts})\n")
+        comment = f"📝 collar-github: 기능 요청이 로드맵에 추가됐습니다."
+        run(f'gh issue comment {num} --repo {repo} --body "{comment}"')
+        log_path.open("a").write(f"{ts} #{num} feature-roadmap: {title[:60]}\n")
+        print(f"       → 로드맵 기록")
+
+    else:
+        # auto_level 미달 → 분류 댓글만
+        level_note = {"bug":"버그 자동수정이 비활성화됨 (auto_level<2)", "feature":"기능개발 자동화가 비활성화됨 (auto_level<3)"}.get(kind,"")
+        comment = f"🏷️ collar-github: `{kind}`로 분류했습니다. {level_note}"
+        run(f'gh issue comment {num} --repo {repo} --body "{comment}"')
+        log_path.open("a").write(f"{ts} #{num} {kind}-labeled: {title[:60]}\n")
+        print(f"       → 라벨 + 댓글 등록")
+
+print("\n✅ collar-github run 완료.")
+PYEOF
+}
+
+# ── watch: SessionStart 훅 등록 ──────────────────────────────────
+cmd_watch() {
+  require_collar
+  CLAUDE_DIR="$TARGET/.claude"
+  SETTINGS_FILE="$CLAUDE_DIR/settings.json"
+  WATCH_HOOK="$COLLAR_DIR/hooks/github-check.sh"
+
+  # github-check.sh 설치
+  cp "$COLLAR_HOME/templates/github-check.sh" "$WATCH_HOOK" 2>/dev/null || {
+    # 템플릿 없으면 인라인 생성
+    cat > "$WATCH_HOOK" << 'HOOKEOF'
+#!/usr/bin/env bash
+# collar github-check hook (SessionStart)
+COLLAR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+GITHUB_CONFIG="$COLLAR_DIR/github.json"
+[ -f "$GITHUB_CONFIG" ] || exit 0
+ENABLED="$(python3 -c "import json,pathlib; d=json.loads(pathlib.Path('$GITHUB_CONFIG').read_text()); print(d.get('enabled','false'))" 2>/dev/null || echo false)"
+[ "$ENABLED" = "True" ] || exit 0
+collar-github run 2>/dev/null || "$HOME/Documents/dev/ai/collar/bin/collar-github" run 2>/dev/null || true
+HOOKEOF
+  }
+  chmod +x "$WATCH_HOOK"
+
+  # settings.json에 SessionStart 훅 등록
+  [ -f "$SETTINGS_FILE" ] || echo '{"permissions":{"allow":[],"deny":[]}}' > "$SETTINGS_FILE"
+  python3 - "$SETTINGS_FILE" "$COLLAR_DIR/collar-dispatcher.sh" << 'PYEOF'
+import sys, json, pathlib
+
+sp = pathlib.Path(sys.argv[1])
+dispatcher = sys.argv[2]
+d = json.loads(sp.read_text())
+if "hooks" not in d:
+    d["hooks"] = {}
+
+# SessionStart에 dispatcher 추가 (없을 경우만)
+if "SessionStart" not in d["hooks"]:
+    d["hooks"]["SessionStart"] = []
+already = any("collar-dispatcher" in str(h) for entry in d["hooks"]["SessionStart"] for h in entry.get("hooks",[]))
+if not already:
+    d["hooks"]["SessionStart"].append({
+        "hooks": [{"type": "command", "command": f"bash '{dispatcher}'", "timeout": 30}]
+    })
+
+sp.write_text(json.dumps(d, indent=2, ensure_ascii=False))
+print("OK")
+PYEOF
+
+  echo "✅ collar-github watch 등록 완료"
+  echo "   SessionStart 시마다 미처리 이슈 자동 확인"
+  echo "   훅: $WATCH_HOOK"
+}
+
+# ── help ─────────────────────────────────────────────────────────
+cmd_help() {
+  cat << 'EOF'
+collar-github — GitHub 이슈 자동 처리 파이프라인
+
+사용법:
+  collar-github setup    GitHub 연동 설정 (레포, 자동처리 레벨)
+  collar-github run      미처리 이슈 일괄 처리
+  collar-github status   현재 상태 확인
+  collar-github watch    세션 시작마다 자동 감시 등록
+
+자동처리 레벨:
+  1  분류 + 라벨 + 댓글만         (안전, 코드 변경 없음)
+  2  레벨1 + bug 자동 수정 PR     (권장)
+  3  레벨2 + feature PR (단순)    (공격적)
+
+처리 흐름:
+  이슈 수집 → LLM 분류 → 라벨/댓글 → (bug→PR, feature→로드맵, question→답변)
+  → .collar/github-processed.log 기록
+
+EOF
+}
+
+# ── 라우팅 ────────────────────────────────────────────────────────
+case "$SUBCOMMAND" in
+  setup)   cmd_setup   ;;
+  run)     cmd_run     ;;
+  status)  cmd_status  ;;
+  watch)   cmd_watch   ;;
+  help|--help|-h) cmd_help ;;
+  *) echo "알 수 없는 명령: $SUBCOMMAND"; cmd_help; exit 1 ;;
+esac

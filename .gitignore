@@ -1,0 +1,38 @@
+# ── collar 런타임 상태 (프로젝트별 생성, 커밋 불필요) ─────────────
+.collar/memory.md
+.collar/session-compact.md
+.collar/session-compact.md.backup.*
+.collar/session-counter
+.collar/collar-dispatcher.sh
+.collar/github.json
+.collar/github-processed.log
+.collar/roadmap.md
+
+# .collar/hooks/ 는 templates/ 에서 복사됨 — 커밋 불필요
+.collar/hooks/
+
+# .collar/config.json 은 예시로 포함 (위에서 명시 제외되지 않으면 추적됨)
+# 포함하려면 이 라인 삭제:
+# .collar/config.json
+
+# ── 프로젝트별 Claude 설정 (절대경로 포함됨) ──────────────────────
+.claude/settings.json
+
+# ── 외부 도구 런타임 ──────────────────────────────────────────────
+.gstack/
+.omc/
+.roo/
+
+# ── 임시/OS 파일 ──────────────────────────────────────────────────
+.DS_Store
+*.html
+*.log
+*.tmp
+*.swp
+*.bak
+
+# ── 의존성 ────────────────────────────────────────────────────────
+node_modules/
+__pycache__/
+*.pyc
+.venv/

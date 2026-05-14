@@ -1,0 +1,210 @@
+#!/usr/bin/env bash
+# collar-watchdog — 프로젝트에 이중 훅(dual-hook) 세션 모니터링을 설치한다
+#
+# OMX 이중 훅 구조:
+#   Layer 1 (Native)  : .claude/settings.json → .collar/collar-dispatcher.sh
+#   Layer 2 (Collar)  : .collar/hooks/*.sh    → 기능별 분리
+#
+# 사용법:
+#   collar-watchdog [프로젝트-폴더]   설치
+#   collar-watchdog --status          현재 상태 확인
+#   collar-watchdog --remove          훅 제거
+
+set -euo pipefail
+
+COLLAR_HOME="${COLLAR_HOME:-$HOME/Documents/dev/ai/collar}"
+TARGET="${1:-.}"
+[ "${1:-}" = "--status" ] || [ "${1:-}" = "--remove" ] && TARGET="."
+TARGET="$(cd "$TARGET" && pwd)"
+PROJECT_NAME="$(basename "$TARGET")"
+COLLAR_DIR="$TARGET/.collar"
+CLAUDE_DIR="$TARGET/.claude"
+SETTINGS_FILE="$CLAUDE_DIR/settings.json"
+DISPATCHER_DEST="$COLLAR_DIR/collar-dispatcher.sh"     # Layer 1 진입점
+HOOK_DEST="$COLLAR_DIR/hooks/session-monitor.sh"       # Layer 2 훅
+CONFIG_FILE="$COLLAR_DIR/config.json"
+
+echo "⌚ collar-watchdog: $PROJECT_NAME"
+echo ""
+
+# ── 상태 확인 ──────────────────────────────────────────────────────
+if [ "${1:-}" = "--status" ]; then
+  echo "── Layer 1 (Native) ──"
+  [ -f "$DISPATCHER_DEST" ] \
+    && echo "✅ dispatcher: $DISPATCHER_DEST" \
+    || echo "❌ dispatcher 없음: $DISPATCHER_DEST"
+  if [ -f "$SETTINGS_FILE" ]; then
+    grep -q "collar-dispatcher" "$SETTINGS_FILE" 2>/dev/null \
+      && echo "✅ settings.json에 dispatcher 등록됨" \
+      || echo "❌ settings.json에 dispatcher 없음"
+  fi
+  echo ""
+  echo "── Layer 2 (Collar hooks) ──"
+  if [ -d "$COLLAR_DIR/hooks" ]; then
+    for h in "$COLLAR_DIR/hooks/"*.sh; do
+      [ -f "$h" ] && echo "  • $(basename "$h")" || true
+    done
+  else
+    echo "  (훅 없음)"
+  fi
+  echo ""
+  echo "── ctx% 추정 ──"
+  if [ -f "$CONFIG_FILE" ]; then
+    python3 -c "
+import json, pathlib
+d = json.loads(pathlib.Path('$CONFIG_FILE').read_text())
+w = d.get('watchdog', {})
+print('  ctx 임계값: {}% (압축 목표: {}%)'.format(
+    w.get('ctx_percent_threshold', 60),
+    w.get('ctx_percent_target', 15)
+))
+print('  폴백 메시지 카운트: {}'.format(w.get('message_threshold', 20)))
+" 2>/dev/null || echo "  config.json 읽기 실패"
+  fi
+  exit 0
+fi
+
+# ── 훅 제거 ───────────────────────────────────────────────────────
+if [ "${1:-}" = "--remove" ]; then
+  [ -f "$DISPATCHER_DEST" ] && rm "$DISPATCHER_DEST" && echo "✅ dispatcher 제거"
+  [ -f "$HOOK_DEST" ]       && rm "$HOOK_DEST"       && echo "✅ session-monitor 제거"
+  if [ -f "$SETTINGS_FILE" ] && grep -q "collar-dispatcher" "$SETTINGS_FILE" 2>/dev/null; then
+    python3 - "$SETTINGS_FILE" << 'PYEOF'
+import sys, json, pathlib
+
+path = pathlib.Path(sys.argv[1])
+d = json.loads(path.read_text())
+
+for hook_type in list(d.get("hooks", {}).keys()):
+    d["hooks"][hook_type] = [
+        h for h in d["hooks"][hook_type]
+        if "collar-dispatcher" not in str(h)
+    ]
+    if not d["hooks"][hook_type]:
+        del d["hooks"][hook_type]
+
+if not d.get("hooks"):
+    del d["hooks"]
+
+path.write_text(json.dumps(d, indent=2, ensure_ascii=False))
+print("OK")
+PYEOF
+    echo "✅ settings.json에서 dispatcher 제거"
+  fi
+  echo ""
+  echo "collar-watchdog 제거 완료."
+  exit 0
+fi
+
+# ── 사전 확인 ──────────────────────────────────────────────────────
+if [ ! -d "$COLLAR_DIR" ]; then
+  echo "❌ .collar 디렉토리 없음. collar-init 먼저 실행하세요."
+  exit 1
+fi
+
+mkdir -p "$COLLAR_DIR/hooks" "$CLAUDE_DIR"
+
+# ── config.json 생성 (없으면 템플릿 복사) ─────────────────────────
+if [ ! -f "$CONFIG_FILE" ]; then
+  if [ -f "$COLLAR_HOME/templates/config.json" ]; then
+    cp "$COLLAR_HOME/templates/config.json" "$CONFIG_FILE"
+    echo "✅ .collar/config.json 생성 (ctx 60%→compact 15%)"
+  else
+    cat > "$CONFIG_FILE" << 'EOF'
+{
+  "watchdog": {
+    "ctx_percent_threshold": 60,
+    "ctx_percent_target": 15,
+    "message_threshold": 20,
+    "auto_compact": true,
+    "notify": true
+  },
+  "github": {
+    "enabled": false,
+    "auto_fix_bugs": false,
+    "auto_create_pr": false
+  }
+}
+EOF
+    echo "✅ .collar/config.json 생성 (ctx 60%→compact 15%)"
+  fi
+fi
+
+# ── Layer 1: dispatcher 설치 ─────────────────────────────────────
+cp "$COLLAR_HOME/templates/collar-dispatcher.sh" "$DISPATCHER_DEST"
+chmod +x "$DISPATCHER_DEST"
+echo "✅ [Layer 1] dispatcher 설치: $DISPATCHER_DEST"
+
+# ── Layer 2: session-monitor 설치 ────────────────────────────────
+cp "$COLLAR_HOME/templates/session-monitor.sh" "$HOOK_DEST"
+chmod +x "$HOOK_DEST"
+echo "✅ [Layer 2] session-monitor 설치: $HOOK_DEST"
+
+# 카운터 초기화 (폴백용)
+echo "0" > "$COLLAR_DIR/session-counter"
+
+# ── settings.json에 dispatcher 등록 ──────────────────────────────
+if [ ! -f "$SETTINGS_FILE" ]; then
+  echo '{"permissions":{"allow":[],"deny":[]}}' > "$SETTINGS_FILE"
+fi
+
+python3 - "$SETTINGS_FILE" "$DISPATCHER_DEST" << 'PYEOF'
+import sys, json, pathlib
+
+settings_path = pathlib.Path(sys.argv[1])
+dispatcher_path = sys.argv[2]
+
+d = json.loads(settings_path.read_text())
+if "hooks" not in d:
+    d["hooks"] = {}
+if "UserPromptSubmit" not in d["hooks"]:
+    d["hooks"]["UserPromptSubmit"] = []
+
+# 기존 collar 항목 제거 후 재등록 (멱등성)
+d["hooks"]["UserPromptSubmit"] = [
+    h for h in d["hooks"]["UserPromptSubmit"]
+    if "collar-dispatcher" not in str(h) and "session-monitor" not in str(h)
+]
+
+d["hooks"]["UserPromptSubmit"].append({
+    "hooks": [{
+        "type": "command",
+        "command": f"bash '{dispatcher_path}'",
+        "timeout": 60
+    }]
+})
+
+settings_path.write_text(json.dumps(d, indent=2, ensure_ascii=False))
+print("OK")
+PYEOF
+
+echo "✅ [Layer 1] settings.json에 dispatcher 등록"
+echo ""
+
+# ── 설치 결과 출력 ────────────────────────────────────────────────
+CTX_THRESHOLD=$(python3 -c "
+import json, pathlib
+d = json.loads(pathlib.Path('$CONFIG_FILE').read_text())
+print(d.get('watchdog', {}).get('ctx_percent_threshold', 60))
+" 2>/dev/null || echo 60)
+CTX_TARGET=$(python3 -c "
+import json, pathlib
+d = json.loads(pathlib.Path('$CONFIG_FILE').read_text())
+print(d.get('watchdog', {}).get('ctx_percent_target', 15))
+" 2>/dev/null || echo 15)
+
+echo "🎉 collar-watchdog 이중 훅 설치 완료!"
+echo ""
+echo "구조:"
+echo "  Layer 1 (Native)  .claude/settings.json → UserPromptSubmit"
+echo "            └─ collar-dispatcher.sh (훅 라우터)"
+echo "  Layer 2 (Collar)  .collar/hooks/"
+echo "            └─ session-monitor.sh (ctx 모니터링)"
+echo "            └─ (추후: github-check.sh, memory-nudge.sh ...)"
+echo ""
+echo "동작: ctx ${CTX_THRESHOLD}% 도달 → collar-compact 자동 실행"
+echo "      → session-compact.md 갱신 (목표 ${CTX_TARGET}%)"
+echo ""
+echo "설정 변경: .collar/config.json"
+echo "상태 확인: collar-watchdog --status"
+echo "제거:      collar-watchdog --remove"
