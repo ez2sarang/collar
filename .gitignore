@@ -7,6 +7,7 @@
 .collar/github.json
 .collar/github-processed.log
 .collar/github-debug-*.txt
+.collar/.compact-lock
 .collar/roadmap.md
 
 # .collar/hooks/ 는 templates/ 에서 복사됨 — 커밋 불필요
