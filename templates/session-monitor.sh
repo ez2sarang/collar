@@ -9,13 +9,13 @@
 # stdin에서 hook event JSON 읽기
 HOOK_DATA="$(cat)"
 
-# UserPromptSubmit 이벤트만 처리
+# UserPromptSubmit + PostToolUse 이벤트만 처리
 EVENT="$(echo "$HOOK_DATA" | python3 -c "
 import json,sys
 try: print(json.load(sys.stdin).get('hook_event_name',''))
 except: print('')
 " 2>/dev/null)"
-[ "$EVENT" = "UserPromptSubmit" ] || [ "$EVENT" = "" ] || exit 0
+[ "$EVENT" = "UserPromptSubmit" ] || [ "$EVENT" = "PostToolUse" ] || [ "$EVENT" = "" ] || exit 0
 
 COLLAR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 COUNTER_FILE="$COLLAR_DIR/session-counter"
@@ -85,6 +85,13 @@ fi
 # ── compact 실행 ───────────────────────────────────────────────────
 [ "$AUTO_COMPACT" != "true" ] && exit 0
 
+# 쿨다운: 마지막 compact 실행 후 5분 이내면 스킵 (PostToolUse 폭발 방지)
+LOCK_FILE="$COLLAR_DIR/.compact-lock"
+if [ -f "$LOCK_FILE" ]; then
+  LOCK_AGE="$(python3 -c "import os,time; print(int(time.time() - os.path.getmtime('$LOCK_FILE')))" 2>/dev/null || echo 999)"
+  [ "$LOCK_AGE" -lt 300 ] 2>/dev/null && exit 0
+fi
+
 COLLAR_COMPACT_BIN=""
 command -v collar-compact >/dev/null 2>&1 && COLLAR_COMPACT_BIN="collar-compact"
 [ -z "$COLLAR_COMPACT_BIN" ] && [ -x "$HOME/Documents/dev/ai/collar/bin/collar-compact" ] && \
@@ -96,6 +103,9 @@ if [ -z "$COLLAR_COMPACT_BIN" ]; then
   echo "COLLAR_WATCHDOG: [$TS] collar-compact 없음. PATH에 collar/bin 추가 필요."
   exit 0
 fi
+
+# 락 파일 갱신 → 5분간 재실행 방지
+touch "$LOCK_FILE"
 
 # compact 실행 (프로젝트 디렉토리 기준)
 cd "$PROJECT_DIR" && "$COLLAR_COMPACT_BIN" 2>/dev/null

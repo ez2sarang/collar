@@ -78,7 +78,7 @@ d = json.loads(path.read_text())
 for hook_type in list(d.get("hooks", {}).keys()):
     d["hooks"][hook_type] = [
         h for h in d["hooks"][hook_type]
-        if "collar-dispatcher" not in str(h)
+        if "collar-dispatcher" not in str(h) and "session-monitor" not in str(h)
     ]
     if not d["hooks"][hook_type]:
         del d["hooks"][hook_type]
@@ -157,28 +157,30 @@ dispatcher_path = sys.argv[2]
 d = json.loads(settings_path.read_text())
 if "hooks" not in d:
     d["hooks"] = {}
-if "UserPromptSubmit" not in d["hooks"]:
-    d["hooks"]["UserPromptSubmit"] = []
 
-# 기존 collar 항목 제거 후 재등록 (멱등성)
-d["hooks"]["UserPromptSubmit"] = [
-    h for h in d["hooks"]["UserPromptSubmit"]
-    if "collar-dispatcher" not in str(h) and "session-monitor" not in str(h)
-]
-
-d["hooks"]["UserPromptSubmit"].append({
+hook_entry = {
     "hooks": [{
         "type": "command",
         "command": f"bash '{dispatcher_path}'",
         "timeout": 60
     }]
-})
+}
+
+# UserPromptSubmit + PostToolUse 양쪽에 dispatcher 등록 (멱등성)
+for event in ("UserPromptSubmit", "PostToolUse"):
+    if event not in d["hooks"]:
+        d["hooks"][event] = []
+    d["hooks"][event] = [
+        h for h in d["hooks"][event]
+        if "collar-dispatcher" not in str(h) and "session-monitor" not in str(h)
+    ]
+    d["hooks"][event].append(hook_entry)
 
 settings_path.write_text(json.dumps(d, indent=2, ensure_ascii=False))
 print("OK")
 PYEOF
 
-echo "✅ [Layer 1] settings.json에 dispatcher 등록"
+echo "✅ [Layer 1] settings.json에 dispatcher 등록 (UserPromptSubmit + PostToolUse)"
 echo ""
 
 # ── 설치 결과 출력 ────────────────────────────────────────────────
@@ -196,13 +198,13 @@ print(d.get('watchdog', {}).get('ctx_percent_target', 15))
 echo "🎉 collar-watchdog 이중 훅 설치 완료!"
 echo ""
 echo "구조:"
-echo "  Layer 1 (Native)  .claude/settings.json → UserPromptSubmit"
+echo "  Layer 1 (Native)  .claude/settings.json → UserPromptSubmit + PostToolUse"
 echo "            └─ collar-dispatcher.sh (훅 라우터)"
 echo "  Layer 2 (Collar)  .collar/hooks/"
-echo "            └─ session-monitor.sh (ctx 모니터링)"
+echo "            └─ session-monitor.sh (ctx 모니터링, 쿨다운 5분)"
 echo "            └─ (추후: github-check.sh, memory-nudge.sh ...)"
 echo ""
-echo "동작: ctx ${CTX_THRESHOLD}% 도달 → collar-compact 자동 실행"
+echo "동작: ctx ${CTX_THRESHOLD}% 도달 → collar-compact 자동 실행 (5분 쿨다운)"
 echo "      → session-compact.md 갱신 (목표 ${CTX_TARGET}%)"
 echo ""
 echo "설정 변경: .collar/config.json"
