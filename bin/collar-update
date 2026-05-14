@@ -23,13 +23,13 @@ if [ ! -f "$CLAUDE_FILE" ]; then
 fi
 
 # TODO가 있는지 확인
-TODO_COUNT=$(grep -c "TODO" "$CLAUDE_FILE" 2>/dev/null || echo 0)
+TODO_COUNT=$(grep -c "TODO" "$CLAUDE_FILE" 2>/dev/null || true)
 if [ "$TODO_COUNT" -eq 0 ]; then
   echo "✅ CLAUDE.md에 TODO 항목이 없습니다. 이미 완성된 상태."
   exit 0
 fi
 
-echo "📋 TODO 항목 $TODO_COUNT개 발견. AI로 채웁니다."
+echo "📋 TODO 항목 ${TODO_COUNT}개 발견. AI로 채웁니다."
 echo ""
 
 # ── 프로젝트 컨텍스트 수집 ─────────────────────────────────────────
@@ -148,9 +148,9 @@ echo "✅ CLAUDE.md 업데이트 완료"
 echo ""
 
 # TODO 항목이 남아있는지 확인
-REMAINING=$(grep -c "TODO" "$CLAUDE_FILE" 2>/dev/null || echo 0)
+REMAINING=$(grep -c "TODO" "$CLAUDE_FILE" 2>/dev/null || true)
 if [ "$REMAINING" -gt 0 ]; then
-  echo "⚠️  TODO 항목 $REMAINING개가 아직 남아있습니다 (AI가 채우지 못한 항목):"
+  echo "⚠️  TODO 항목 ${REMAINING}개가 아직 남아있습니다 (AI가 채우지 못한 항목):"
   grep -n "TODO" "$CLAUDE_FILE" | head -5
   echo ""
 fi

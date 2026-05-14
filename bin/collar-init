@@ -316,13 +316,48 @@ GLOBAL_RULES_EOF
   fi
 fi
 
+# ── collar-watchdog 자동 설치 ────────────────────────────────────
+echo ""
+echo "━━━ watchdog 설치 ━━━"
+COLLAR_INIT_BIN="$(cd "$(dirname "$0")" && pwd)"
+if bash "$COLLAR_INIT_BIN/collar-watchdog" "$TARGET"; then
+  echo "✅ watchdog 설치 완료"
+else
+  echo "⚠️  watchdog 설치 실패 — 수동 실행: collar-watchdog $TARGET"
+fi
+
+# ── collar-update: CLAUDE.md TODO 자동 채움 ──────────────────────
+echo ""
+echo "━━━ CLAUDE.md 자동 업데이트 ━━━"
+if bash "$COLLAR_INIT_BIN/collar-update" "$TARGET"; then
+  echo "✅ CLAUDE.md 업데이트 완료"
+else
+  echo "⚠️  collar-update 실패 — 수동 실행: collar-update $TARGET"
+fi
+
+# ── collar-github 연동 (선택) ─────────────────────────────────────
+echo ""
+echo "━━━ GitHub 연동 ━━━"
+if [ -t 0 ]; then
+  read -p "GitHub 이슈 자동화 연동할까요? [y/N]: " GH_CONFIRM
+  if [ "$GH_CONFIRM" = "y" ] || [ "$GH_CONFIRM" = "Y" ]; then
+    if bash "$COLLAR_INIT_BIN/collar-github" setup "$TARGET"; then
+      echo "✅ GitHub 연동 완료"
+    else
+      echo "⚠️  collar-github 실패 — 수동 실행: collar-github setup $TARGET"
+    fi
+  else
+    echo "건너뜀 (나중에: collar-github setup)"
+  fi
+else
+  echo "(비대화형 실행: 건너뜀. 수동: collar-github setup $TARGET)"
+fi
+
 # ── 완료 ─────────────────────────────────────────────────────────
 echo ""
 echo "🎉 하네스 설치 완료!"
 echo ""
-echo "다음 단계:"
-echo "  1. $CLAUDE_OUT 을 열고 TODO 항목 채우기"
-echo "  2. 실제 검증 명령어 확인: $VERIFY_COMMAND"
-echo "  3. Claude Code 재시작하면 새 하네스 적용"
-echo ""
-echo "팁: 'AI야, CLAUDE.md의 프로젝트 개요와 레포 구조를 실제에 맞게 업데이트해줘'"
+echo "확인:"
+echo "  collar-watchdog --status   # watchdog 상태"
+echo "  collar-update --dry-run    # CLAUDE.md 변경 미리보기"
+echo "  collar-github setup        # GitHub 연동 (미설정 시)"
