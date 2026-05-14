@@ -155,8 +155,12 @@ cmd_run() {
     exit 0
   fi
 
-  # 이슈별 처리
-  echo "$ISSUES" | python3 - "$REPO" "$AUTO_LEVEL" "$PROCESSED_LOG" "$PROCESSED_IDS" "$TARGET" "$COLLAR_HOME" << 'PYEOF'
+  # 이슈별 처리 (issues를 임시 파일로 전달 — pipe+heredoc stdin 충돌 방지)
+  ISSUES_TMP="$(mktemp /tmp/collar-github-issues.XXXXXX.json)"
+  echo "$ISSUES" > "$ISSUES_TMP"
+  trap "rm -f $ISSUES_TMP" EXIT
+
+  python3 - "$REPO" "$AUTO_LEVEL" "$PROCESSED_LOG" "$PROCESSED_IDS" "$TARGET" "$COLLAR_HOME" "$ISSUES_TMP" << 'PYEOF'
 import sys, json, subprocess, pathlib, datetime, os
 
 repo = sys.argv[1]
@@ -165,8 +169,9 @@ log_path = pathlib.Path(sys.argv[3])
 processed_str = sys.argv[4]
 project_dir = sys.argv[5]
 collar_home = sys.argv[6]
+issues_file = sys.argv[7]
 
-issues = json.load(sys.stdin)
+issues = json.loads(pathlib.Path(issues_file).read_text())
 processed = set(processed_str.split()) if processed_str else set()
 
 def run(cmd, **kw):
