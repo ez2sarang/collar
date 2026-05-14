@@ -263,7 +263,7 @@ if [ -f "$GLOBAL_CLAUDE" ]; then
     if [ "$GLOBAL_CONFIRM" = "v" ] || [ "$GLOBAL_CONFIRM" = "V" ]; then
       echo ""
       echo "── 추가될 내용 미리보기 ──────────────────────────────"
-      echo "## collar 하네스 규칙 (모든 프로젝트 공통)"
+      echo "## AI 협업 완료 프로토콜 (모든 프로젝트 공통)"
       echo ""
       echo "• 완료 3단계: STARTED / TESTED / VERIFIED"
       echo "• 모호한 표현 차단: 효율적으로, 잘, 이전처럼, 비슷하게"
@@ -279,7 +279,7 @@ if [ -f "$GLOBAL_CLAUDE" ]; then
     if [ "$GLOBAL_CONFIRM" = "e" ] || [ "$GLOBAL_CONFIRM" = "E" ]; then
       echo ""
       echo "의견/메모를 입력하세요 (글로벌 CLAUDE.md에 주석으로 저장됩니다):"
-      echo "예: '2026-05-14 socialMakeit 좌절 분석 기반으로 추가' / '4번째 규칙은 필요 없다고 생각'"
+      echo "예: '2026-05-14 모든 프로젝트에 유용해서 추가' / '4번째 규칙은 필요 없다고 생각'"
       read -p "> " GLOBAL_NOTE
       GLOBAL_CONFIRM="y"
     fi
@@ -292,7 +292,7 @@ if [ -f "$GLOBAL_CLAUDE" ]; then
       fi
       cat >> "$GLOBAL_CLAUDE" << 'GLOBAL_RULES_EOF'
 
-## collar 하네스 규칙 (모든 프로젝트 공통)
+## AI 협업 완료 프로토콜 (모든 프로젝트 공통)
 
 ### 완료 3단계 프로토콜
 

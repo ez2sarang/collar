@@ -30,8 +30,8 @@ except: print('False')
 # collar-github run 실행 (PATH에 있으면 그것, 없으면 절대경로)
 COLLAR_GITHUB_BIN=""
 command -v collar-github >/dev/null 2>&1 && COLLAR_GITHUB_BIN="collar-github"
-[ -z "$COLLAR_GITHUB_BIN" ] && [ -x "$HOME/Documents/dev/ai/collar/bin/collar-github" ] && \
-  COLLAR_GITHUB_BIN="$HOME/Documents/dev/ai/collar/bin/collar-github"
+[ -z "$COLLAR_GITHUB_BIN" ] && [ -x "$HOME/.collar/bin/collar-github" ] && \
+  COLLAR_GITHUB_BIN="$HOME/.collar/bin/collar-github"
 
 [ -z "$COLLAR_GITHUB_BIN" ] && exit 0
 
