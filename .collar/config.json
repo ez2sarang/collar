@@ -7,8 +7,10 @@
     "notify": true
   },
   "github": {
-    "enabled": false,
+    "enabled": true,
     "auto_fix_bugs": false,
-    "auto_create_pr": false
+    "auto_create_pr": false,
+    "repo": "ez2sarang/collar",
+    "auto_level": 2
   }
 }

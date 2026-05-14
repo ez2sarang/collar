@@ -93,7 +93,7 @@ CLAUDE_BIN="${CLAUDE_PATH:-/opt/homebrew/bin/claude}"
 
 if command -v claude >/dev/null 2>&1 || [ -x "$CLAUDE_BIN" ]; then
   echo "🤖 압축 중 (Claude)..."
-  LLM_OUTPUT="$("$CLAUDE_BIN" -p "$PROMPT" 2>/dev/null)" && LLM_USED="claude" || true
+  LLM_OUTPUT="$("$CLAUDE_BIN" -p --model claude-haiku-4-5-20251001 "$PROMPT" 2>/dev/null)" && LLM_USED="claude-haiku" || true
 fi
 
 if [ -z "$LLM_OUTPUT" ] && command -v gemini >/dev/null 2>&1; then
@@ -143,6 +143,13 @@ import sys, pathlib, re
 
 memory_path, today, llm_used = sys.argv[1], sys.argv[2], sys.argv[3]
 content = pathlib.Path(memory_path).read_text()
+
+# 같은 날 이미 collar-compact 항목이 있으면 기록하지 않음 (중복 방지)
+duplicate_marker = f"[{today}] collar-compact 실행"
+if duplicate_marker in content:
+    new_content = re.sub(r'마지막 업데이트: \d{4}-\d{2}-\d{2}', f'마지막 업데이트: {today}', content)
+    pathlib.Path(memory_path).write_text(new_content)
+    sys.exit(0)
 
 entry = f"\n### [{today}] collar-compact 실행\n**발견:** {llm_used}로 세션 컨텍스트 압축 → session-compact.md\n**적용:** 다음 세션 시작 시 session-compact.md를 memory.md보다 먼저 읽을 것\n"
 
