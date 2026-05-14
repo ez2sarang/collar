@@ -29,10 +29,10 @@ collar는 **프로젝트 수준의 AI 자율 운전 인프라**다.
 ### 핵심 규칙
 1. collar는 자기 자신의 하네스를 가진다 (메타 프로젝트)
 2. 템플릿 파일 변경 시 실제 적용 프로젝트에 영향을 확인한다
-3. `collar init` 스크립트는 멱등성(idempotent)을 유지한다 — 여러 번 실행해도 안전
+3. `collar-init` 스크립트는 멱등성(idempotent)을 유지한다 — 여러 번 실행해도 안전
 
 ### 검증 기준
-- [ ] `collar init` 후 새 프로젝트에서 AI가 맥락 없이 작업 시작 가능한가?
+- [ ] `collar-init` 후 새 프로젝트에서 AI가 맥락 없이 작업 시작 가능한가?
 - [ ] 템플릿이 언어/프레임워크 무관하게 적용되는가?
 - [ ] Paperclip API 연동 없이도 독립 동작하는가?
 
@@ -42,20 +42,36 @@ collar는 **프로젝트 수준의 AI 자율 운전 인프라**다.
 
 ```
 collar/
-├── CLAUDE.md          # 이 파일 (collar 헌법)
-├── README.md          # 사용자를 위한 설명
-├── doc/               # 설계 문서
-│   └── plans/         # YYYY-MM-DD-slug.md 형식
-├── templates/         # 다른 프로젝트에 적용할 하네스 템플릿
-│   ├── CLAUDE.md.base     # 공통 헌법 (모든 프로젝트)
-│   ├── CLAUDE.md.nodejs   # Node.js 특화
-│   ├── CLAUDE.md.python   # Python 특화
-│   └── AGENTS.md.base     # 에이전트 가이드 템플릿
-└── bin/               # 스크립트
-    ├── collar-init      # 프로젝트 하네스 세팅 스크립트
-    ├── collar-remember  # 세션 중 인사이트 기록 (LLM 자동 글로벌 판단)
-    ├── collar-update    # CLAUDE.md TODO 항목 AI로 자동 채우기
-    └── collar-compact   # 세션 컨텍스트 압축 → session-compact.md
+├── CLAUDE.md              # 이 파일 (collar 헌법)
+├── AGENTS.md              # 에이전트 가이드
+├── README.md              # 사용자를 위한 설명
+├── .claude/
+│   └── settings.json      # Claude Code 권한/훅 설정
+├── .collar/               # 세션 상태 저장소 (session-compact.md, memory.md)
+├── bin/                   # 실행 스크립트
+│   ├── collar-init        # 프로젝트 하네스 세팅 스크립트
+│   ├── collar-watchdog    # 컨텍스트 임계값 감시 + 자동 compact
+│   ├── collar-compact     # 세션 컨텍스트 압축 → session-compact.md
+│   ├── collar-remember    # 세션 중 인사이트 기록 (LLM 자동 글로벌 판단)
+│   ├── collar-update      # CLAUDE.md TODO 항목 AI로 자동 채우기
+│   └── collar-github      # GitHub 이슈 분석 + PR 자동 생성
+├── templates/             # 다른 프로젝트에 적용할 하네스 템플릿
+│   ├── CLAUDE.md.base         # 공통 헌법 (모든 프로젝트)
+│   ├── AGENTS.md.base         # 에이전트 가이드 템플릿
+│   ├── collar-dispatcher.sh   # 훅 디스패처
+│   ├── config.json            # 기본 설정 템플릿
+│   ├── github-check.sh        # GitHub 체크 훅
+│   └── session-monitor.sh     # 세션 모니터 훅
+└── doc/                   # 설계 문서
+    ├── 2026-05-14-architecture-v2.md
+    ├── 2026-05-14-harness-system-plan.md
+    ├── 2026-05-14-session-qa.md
+    ├── 2026-05-14-memory-system-design.md
+    ├── 2026-05-14-frustration-analysis.md
+    ├── 2026-05-14-runtime-environment-analysis.md
+    ├── 2026-05-14-competitive-analysis.md
+    ├── 2026-05-14-interview-prep.md
+    └── 2026-05-14-glossary.md
 ```
 
 ---
@@ -72,7 +88,7 @@ ez2claude 글로벌 라우팅을 따른다. 추가 규칙:
 ## 완료 기준
 
 변경은 다음 조건에서 완료:
-1. `collar init` 실행 시 오류 없음
+1. `collar-init` 실행 시 오류 없음
 2. 생성된 CLAUDE.md가 ez2claude 글로벌 설정과 충돌하지 않음
 3. 최소 1개 실제 프로젝트에서 검증
 

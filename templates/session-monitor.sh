@@ -42,6 +42,60 @@ except: pass
 " 2>/dev/null)"
 fi
 
+# ── memory.md 중복 섹션 자동 감지 + 정리 ─────────────────────────
+# PostToolUse는 빈도가 높으므로 UserPromptSubmit에서만 실행
+MEMORY_FILE="$COLLAR_DIR/memory.md"
+if [ "$EVENT" = "UserPromptSubmit" ] && [ -f "$MEMORY_FILE" ]; then
+  DEDUP_RESULT="$(python3 - "$MEMORY_FILE" << 'PYEOF'
+import pathlib, re, sys
+from collections import defaultdict
+
+memory_path = sys.argv[1]
+content = pathlib.Path(memory_path).read_text()
+
+# h3 헤더([DATE] TITLE 형식) 위치 전부 찾기
+h3_pattern = re.compile(r'\n(### \[(\d{4}-\d{2}-\d{2})\] (.+))\n')
+headers = list(h3_pattern.finditer(content))
+
+if not headers:
+    sys.exit(0)
+
+# 섹션별 분리: (start, end, date, title)
+sections = []
+for i, m in enumerate(headers):
+    start = m.start()
+    end = headers[i+1].start() if i + 1 < len(headers) else len(content)
+    sections.append({'start': start, 'end': end,
+                     'date': m.group(2), 'title': m.group(3).strip(),
+                     'text': content[start:end]})
+
+# 같은 title이 2개 이상이면 최신 날짜만 유지
+by_title = defaultdict(list)
+for s in sections:
+    by_title[s['title']].append(s)
+
+to_remove = set()
+for title, group in by_title.items():
+    if len(group) > 1:
+        for s in sorted(group, key=lambda x: x['date'])[:-1]:
+            to_remove.add(id(s))
+
+if not to_remove:
+    sys.exit(0)
+
+preamble = content[:headers[0].start()]
+kept = [s for s in sections if id(s) not in to_remove]
+pathlib.Path(memory_path).write_text(preamble + ''.join(s['text'] for s in kept))
+print(len(to_remove))
+PYEOF
+  )" 2>/dev/null || true
+
+  if [ -n "$DEDUP_RESULT" ] && [ "$DEDUP_RESULT" != "0" ]; then
+    TS_NOW="$(date '+%Y-%m-%d %H:%M')"
+    echo "COLLAR_WATCHDOG: [$TS_NOW] memory.md 중복 ${DEDUP_RESULT}개 자동 정리 완료."
+  fi
+fi
+
 # ── ctx% 추정 ─────────────────────────────────────────────────────
 # Claude Code는 200K 토큰 컨텍스트를 사용.
 # transcript JSONL 파일 크기로 대화 누적량을 추정한다.

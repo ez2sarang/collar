@@ -136,7 +136,7 @@ if [ -f "$MEMORY_FILE" ]; then
   echo "   메모리 크기: ${MEMORY_SIZE}B → 압축: ${COMPACT_SIZE}B (${RATIO} 절약)"
 fi
 
-# memory.md에 compact 기록
+# memory.md에 compact 기록 (날짜 무관하게 항목 하나만 유지 — 기존 있으면 update, 없으면 append)
 if [ -f "$MEMORY_FILE" ]; then
   python3 - "$MEMORY_FILE" "$TODAY" "$LLM_USED" << 'PYEOF'
 import sys, pathlib, re
@@ -144,21 +144,27 @@ import sys, pathlib, re
 memory_path, today, llm_used = sys.argv[1], sys.argv[2], sys.argv[3]
 content = pathlib.Path(memory_path).read_text()
 
-# 같은 날 이미 collar-compact 항목이 있으면 기록하지 않음 (중복 방지)
-duplicate_marker = f"[{today}] collar-compact 실행"
-if duplicate_marker in content:
-    new_content = re.sub(r'마지막 업데이트: \d{4}-\d{2}-\d{2}', f'마지막 업데이트: {today}', content)
-    pathlib.Path(memory_path).write_text(new_content)
-    sys.exit(0)
+new_entry_body = (
+    f"**발견:** {llm_used}로 세션 컨텍스트 압축 → session-compact.md\n"
+    f"**적용:** 다음 세션 시작 시 session-compact.md를 memory.md보다 먼저 읽을 것"
+)
 
-entry = f"\n### [{today}] collar-compact 실행\n**발견:** {llm_used}로 세션 컨텍스트 압축 → session-compact.md\n**적용:** 다음 세션 시작 시 session-compact.md를 memory.md보다 먼저 읽을 것\n"
-
-insert_after = "## 작업 이력 요약"
-if insert_after in content:
-    pos = content.index(insert_after) + len(insert_after)
-    new_content = content[:pos] + "\n" + entry + content[pos:]
+# 기존 collar-compact 실행 항목이 있으면 날짜+내용 업데이트 (날짜 무관)
+existing = re.search(
+    r'(### \[\d{4}-\d{2}-\d{2}\] collar-compact 실행\n)(.+?)(\n(?=###|\Z))',
+    content, re.DOTALL
+)
+if existing:
+    new_section = f"### [{today}] collar-compact 실행\n{new_entry_body}\n"
+    new_content = content[:existing.start()] + new_section + content[existing.end():]
 else:
-    new_content = content + "\n" + entry
+    new_entry = f"\n### [{today}] collar-compact 실행\n{new_entry_body}\n"
+    insert_after = "## 작업 이력 요약"
+    if insert_after in content:
+        pos = content.index(insert_after) + len(insert_after)
+        new_content = content[:pos] + "\n" + new_entry + content[pos:]
+    else:
+        new_content = content + "\n" + new_entry
 
 new_content = re.sub(r'마지막 업데이트: \d{4}-\d{2}-\d{2}', f'마지막 업데이트: {today}', new_content)
 pathlib.Path(memory_path).write_text(new_content)
