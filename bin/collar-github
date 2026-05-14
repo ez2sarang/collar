@@ -349,15 +349,70 @@ for issue in issues:
             print(f"       → 자동 수정 불가: {summary}")
         else:
             run(f'cd "{project_dir}" && git add -A && git commit -m "fix: #{num} {title[:50]}\n\nAuto-fix by collar-github\n\n{summary}"')
+
+            # ── review-agent (Sonnet): 변경 코드 검토 ─────────────
+            print(f"       → review-agent 실행 중...")
+            review_notes = ""
+            diff_full = subprocess.run(
+                ["git", "diff", "HEAD~1", "HEAD"],
+                capture_output=True, text=True, cwd=project_dir
+            ).stdout[:6000]
+
+            if diff_full and claude_bin:
+                review_prompt = (
+                    f"You are a code reviewer. Review this git diff for issue #{num} fix.\n\n"
+                    f"Issue: {title}\n\n"
+                    f"Diff:\n{diff_full}\n\n"
+                    f"Output exactly:\n"
+                    f"REVIEW_STATUS: APPROVED | NEEDS_WORK\n"
+                    f"REVIEW_NOTES: <one or two sentences — key risks or confirmation it looks correct>\n"
+                    f"No other text."
+                )
+                try:
+                    rev_r = subprocess.run(
+                        [claude_bin, "--print", "-",
+                         "--output-format", "stream-json",
+                         "--dangerously-skip-permissions",
+                         "--model", "claude-haiku-4-5-20251001",
+                         "--max-turns", "1"],
+                        input=review_prompt,
+                        capture_output=True, text=True, timeout=60,
+                        cwd=project_dir
+                    )
+                    review_status = "APPROVED"
+                    for line in rev_r.stdout.splitlines():
+                        try:
+                            obj = json.loads(line)
+                            text = ""
+                            if obj.get("type") == "result":
+                                text = obj.get("result", "")
+                            elif obj.get("type") == "assistant":
+                                for blk in obj.get("message", {}).get("content", []):
+                                    if blk.get("type") == "text":
+                                        text = blk.get("text", "")
+                            for tline in text.splitlines():
+                                if tline.startswith("REVIEW_STATUS:"):
+                                    review_status = tline.replace("REVIEW_STATUS:", "").strip()
+                                if tline.startswith("REVIEW_NOTES:"):
+                                    review_notes = tline.replace("REVIEW_NOTES:", "").strip()
+                        except Exception:
+                            pass
+                    print(f"       → 리뷰: {review_status} — {review_notes[:80]}")
+                except Exception as e:
+                    review_notes = f"리뷰 실패: {e}"
+                    review_status = "APPROVED"
+
             push_r = run(f'cd "{project_dir}" && git push -u origin {branch}')
             run(f'cd "{project_dir}" && git checkout main 2>/dev/null || git checkout - 2>/dev/null')
 
             if push_r.returncode == 0:
+                review_section = f"\n\n**🔍 review-agent:** {review_notes}" if review_notes else ""
                 pr_body = (
                     f"Fixes #{num}\n\n"
                     f"🤖 자동 생성 PR by collar-github\n\n"
                     f"**수정 내용:** {summary}\n\n"
                     f"**변경 파일:** {', '.join(changed_files)}"
+                    f"{review_section}"
                 )
                 pr_r = run(f'gh pr create --repo {repo} --base main --head {branch} --title "fix: {title[:60]}" --body "{pr_body}"')
                 if pr_r.returncode == 0:
