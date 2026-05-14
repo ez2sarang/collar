@@ -159,7 +159,7 @@ Claude Code 세션들 (여러 프로젝트 병렬 처리)
 | ✅ 완료 | collar-github (Anthropic API 직접 호출) | 구현 완료 (2026-05-14) |
 | ✅ 완료 | collar-interview (대화형 7문 인터뷰) | 구현 완료 (2026-05-15) |
 | ✅ 완료 | watchdog memory.md 자동 dedup | 구현 완료 (2026-05-15) |
-| 🔜 단기 | collar-interview clarity scoring (Ouroboros 패턴) | 미구현 |
+| ✅ 완료 | collar-interview clarity scoring (Ouroboros 패턴) | 구현 완료 (2026-05-15) |
 | 🔜 중기 | 플러그인 아키텍처 (collar-plugin) | 미구현 |
 | 🔜 장기 | PaperCompany UI 연동 | 미구현 |
 
