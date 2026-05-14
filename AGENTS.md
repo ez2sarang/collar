@@ -61,14 +61,20 @@ collar/
 ## 4. 개발 환경
 
 ```sh
-# collar-init PATH에 추가
-export PATH="$HOME/Documents/dev/ai/collar/bin:$PATH"
+# 설치 (표준)
+./install.sh          # ~/.collar/bin 에 배포 + PATH 등록 안내
+
+# 개발 중 레포에서 직접 실행하려면
+export PATH="$HOME/.collar/bin:$PATH"   # 설치 후
+# 또는 레포 bin/ 직접 사용
+export PATH="/path/to/collar/bin:$PATH"
 
 # 새 프로젝트에 적용
 cd /path/to/project && collar-init
 
-# 특정 경로에 적용
-collar-init ~/Documents/dev/ai/my-project
+# 스크립트 위치 자동 감지: COLLAR_HOME은 스크립트 위치 기준으로 결정됨
+# ~/.collar/bin/ 에 설치됐으면 COLLAR_HOME=~/.collar
+# 레포 bin/에서 실행하면 COLLAR_HOME=레포 루트
 ```
 
 ---

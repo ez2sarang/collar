@@ -4,7 +4,9 @@
 
 set -euo pipefail
 
-COLLAR_HOME="${COLLAR_HOME:-$HOME/Documents/dev/ai/collar}"
+# 스크립트 위치 기준으로 COLLAR_HOME 자동 결정 (dev 레포 / ~/.collar 설치 모두 동작)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COLLAR_HOME="${COLLAR_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 TARGET="${1:-.}"
 TARGET="$(cd "$TARGET" && pwd)"
 PROJECT_NAME="$(basename "$TARGET")"

@@ -148,8 +148,8 @@ fi
 
 COLLAR_COMPACT_BIN=""
 command -v collar-compact >/dev/null 2>&1 && COLLAR_COMPACT_BIN="collar-compact"
-[ -z "$COLLAR_COMPACT_BIN" ] && [ -x "$HOME/Documents/dev/ai/collar/bin/collar-compact" ] && \
-  COLLAR_COMPACT_BIN="$HOME/Documents/dev/ai/collar/bin/collar-compact"
+[ -z "$COLLAR_COMPACT_BIN" ] && [ -x "$HOME/.collar/bin/collar-compact" ] && \
+  COLLAR_COMPACT_BIN="$HOME/.collar/bin/collar-compact"
 
 TS="$(date '+%Y-%m-%d %H:%M')"
 

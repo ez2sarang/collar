@@ -11,6 +11,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COLLAR_HOME="${COLLAR_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
 # ── 인자 파싱 ─────────────────────────────────────────────────────────
 TARGET="."
 DRY_RUN=false
@@ -388,10 +391,8 @@ EXTRA_BLOCK=""
 ${EXTRA_QA}"
 
 TEMPLATE_BASE=""
-if [ -f "/Users/ez2sarang/Documents/dev/ai/collar/templates/CLAUDE.md.base" ]; then
-  TEMPLATE_BASE="$(cat /Users/ez2sarang/Documents/dev/ai/collar/templates/CLAUDE.md.base)"
-elif [ -d "$(dirname "$TARGET")/../collar/templates" ]; then
-  TEMPLATE_BASE="$(cat "$(dirname "$TARGET")/../collar/templates/CLAUDE.md.base" 2>/dev/null || true)"
+if [ -f "$COLLAR_HOME/templates/CLAUDE.md.base" ]; then
+  TEMPLATE_BASE="$(cat "$COLLAR_HOME/templates/CLAUDE.md.base")"
 fi
 
 {

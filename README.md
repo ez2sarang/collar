@@ -163,8 +163,10 @@ gstack/OMC가 없는 환경에서도 core 기능(collar-init, collar-watchdog, c
 ## 빠른 시작
 
 ```bash
-# 1. PATH 추가
-export PATH="$HOME/path/to/collar/bin:$PATH"
+# 1. 설치 (~/.collar/bin 에 배포)
+git clone https://github.com/ez2sarang/collar.git
+cd collar && bash setup.sh
+# → PATH 자동 등록 안내 (zsh/bash rc 파일에 한 줄 추가)
 
 # 2. 프로젝트 하네스 설치
 cd my-project

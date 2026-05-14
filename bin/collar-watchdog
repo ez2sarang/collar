@@ -12,7 +12,8 @@
 
 set -euo pipefail
 
-COLLAR_HOME="${COLLAR_HOME:-$HOME/Documents/dev/ai/collar}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COLLAR_HOME="${COLLAR_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 TARGET="${1:-.}"
 [ "${1:-}" = "--status" ] || [ "${1:-}" = "--remove" ] && TARGET="."
 TARGET="$(cd "$TARGET" && pwd)"
