@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+# collar-template-sync — 글로벌 규칙/메모리와 템플릿 간 갭 분석 후 y/n으로 동기화
+# 사용법: collar-template-sync [--dry-run]
+#
+# 동작:
+#   1. ~/.claude/CLAUDE.md 섹션 vs templates/global/CLAUDE.md.rules 비교
+#   2. 프로젝트 메모리 파일 vs templates/global/memory/ 비교
+#   3. 갭 항목마다 y/n 확인 후 템플릿에 추가
+#   4. 변경 있으면 자동 커밋
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COLLAR_HOME="${COLLAR_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
+DRY_RUN=false
+for arg in "$@"; do
+  [ "$arg" = "--dry-run" ] && DRY_RUN=true
+done
+
+GLOBAL_CLAUDE="$HOME/.claude/CLAUDE.md"
+RULES_TEMPLATE="$COLLAR_HOME/templates/global/CLAUDE.md.rules"
+MEMORY_TEMPLATE_DIR="$COLLAR_HOME/templates/global/memory"
+
+PROJECT_PATH="$(pwd)"
+ENCODED_PATH="$(echo "$PROJECT_PATH" | tr '/' '-')"
+PROJECT_MEMORY_DIR="$HOME/.claude/projects/$ENCODED_PATH/memory"
+
+CLAUDE_BIN="${CLAUDE_PATH:-/opt/homebrew/bin/claude}"
+
+echo "🔍 collar-template-sync"
+[ "$DRY_RUN" = "true" ] && echo "   모드: --dry-run"
+echo ""
+
+# ── LLM 헬퍼 ──────────────────────────────────────────────────────
+llm_ask() {
+  local prompt="$1"
+  local result=""
+  if command -v claude >/dev/null 2>&1 || [ -x "$CLAUDE_BIN" ]; then
+    result="$("$CLAUDE_BIN" -p "$prompt" 2>/dev/null)" || true
+  fi
+  if [ -z "$result" ] && command -v gemini >/dev/null 2>&1; then
+    result="$(echo "$prompt" | gemini -p --approval-mode yolo 2>/dev/null)" || true
+  fi
+  echo "$result"
+}
+
+CHANGED=false
+
+# ── PHASE 1: CLAUDE.md 섹션 갭 분석 ──────────────────────────────
+echo "━━━ Phase 1: CLAUDE.md 규칙 갭 분석 ━━━"
+
+if [ ! -f "$GLOBAL_CLAUDE" ]; then
+  echo "⚠️  ~/.claude/CLAUDE.md 없음 — 스킵"
+else
+  TEMPLATE_CONTENT="$(cat "$RULES_TEMPLATE" 2>/dev/null || echo "")"
+
+  # 글로벌 CLAUDE.md에서 ## 섹션 추출 (OMC 블록 이후만)
+  GLOBAL_SECTIONS=()
+  CURRENT_SECTION=""
+  IN_OMC=true
+
+  while IFS= read -r line; do
+    # OMC 블록 종료 감지
+    [[ "$line" =~ "OMC:END" ]] && IN_OMC=false && continue
+    [ "$IN_OMC" = "true" ] && continue
+
+    if [[ "$line" =~ ^##[^#] ]]; then
+      [ -n "$CURRENT_SECTION" ] && GLOBAL_SECTIONS+=("$CURRENT_SECTION")
+      CURRENT_SECTION="$line"$'\n'
+    else
+      CURRENT_SECTION+="$line"$'\n'
+    fi
+  done < "$GLOBAL_CLAUDE"
+  [ -n "$CURRENT_SECTION" ] && GLOBAL_SECTIONS+=("$CURRENT_SECTION")
+
+  GAPS_RULES=()
+
+  for section in "${GLOBAL_SECTIONS[@]}"; do
+    SECTION_TITLE="$(echo "$section" | head -1 | sed 's/^## //')"
+
+    PROMPT="아래 두 텍스트를 비교해라.
+
+[템플릿 파일]
+$TEMPLATE_CONTENT
+
+[검사할 섹션]
+$section
+
+질문: 템플릿 파일에 이미 검사할 섹션과 같은 의미의 내용이 있는가?
+표현이 달라도 규칙/원칙의 의도가 같으면 중복으로 판단한다.
+반드시 YES 또는 NO 한 단어만 답하라."
+
+    ANSWER="$(llm_ask "$PROMPT" | tr '[:lower:]' '[:upper:]' | grep -o 'YES\|NO' | head -1 || echo "YES")"
+
+    if [ "$ANSWER" = "NO" ]; then
+      GAPS_RULES+=("$section")
+      echo "   📋 갭 발견: $SECTION_TITLE"
+    fi
+  done
+
+  if [ ${#GAPS_RULES[@]} -eq 0 ]; then
+    echo "   ✅ 규칙 갭 없음"
+  else
+    echo ""
+    echo "   발견된 갭 ${#GAPS_RULES[@]}개:"
+    for section in "${GAPS_RULES[@]}"; do
+      TITLE="$(echo "$section" | head -1 | sed 's/^## //')"
+      echo ""
+      echo "   ┌─ $TITLE"
+      echo "$section" | tail -n +2 | head -5 | sed 's/^/   │ /'
+      echo "   └─"
+      echo ""
+
+      if [ -t 0 ]; then
+        read -p "   템플릿에 추가할까요? [y/N]: " CONFIRM
+      else
+        CONFIRM="N"
+      fi
+
+      if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
+        if [ "$DRY_RUN" = "false" ]; then
+          printf '\n%s' "$section" >> "$RULES_TEMPLATE"
+          echo "   ✅ 추가됨: $TITLE"
+          CHANGED=true
+        else
+          echo "   [dry-run] 추가 예정: $TITLE"
+        fi
+      else
+        echo "   건너뜀: $TITLE"
+      fi
+    done
+  fi
+fi
+
+# ── PHASE 2: 메모리 파일 갭 분석 ──────────────────────────────────
+echo ""
+echo "━━━ Phase 2: 메모리 파일 갭 분석 ━━━"
+
+if [ ! -d "$PROJECT_MEMORY_DIR" ]; then
+  echo "⚠️  프로젝트 메모리 디렉토리 없음 — 스킵"
+else
+  TEMPLATE_MEM_LIST=""
+  for f in "$MEMORY_TEMPLATE_DIR"/*.md; do
+    [ -f "$f" ] || continue
+    DESC="$(grep '^description:' "$f" | sed 's/^description: //' | tr -d '"')"
+    TEMPLATE_MEM_LIST+="$(basename "$f"): $DESC\n"
+  done
+
+  GAPS_MEM=()
+
+  for mem_file in "$PROJECT_MEMORY_DIR"/*.md; do
+    [ -f "$mem_file" ] || continue
+    BASENAME="$(basename "$mem_file")"
+    [ "$BASENAME" = "MEMORY.md" ] && continue
+
+    MEM_CONTENT="$(cat "$mem_file")"
+    MEM_DESC="$(grep '^description:' "$mem_file" | sed 's/^description: //' | tr -d '"' || echo "$BASENAME")"
+
+    PROMPT="아래 기존 템플릿 메모리 목록과 추가 후보 메모리를 비교해라.
+
+[기존 템플릿 메모리 목록]
+$TEMPLATE_MEM_LIST
+
+[추가 후보 메모리]
+파일명: $BASENAME
+설명: $MEM_DESC
+내용:
+$MEM_CONTENT
+
+질문: 기존 템플릿 목록 중 추가 후보와 같은 의미/규칙을 다루는 것이 있는가?
+반드시 YES 또는 NO 한 단어만 답하라."
+
+    ANSWER="$(llm_ask "$PROMPT" | tr '[:lower:]' '[:upper:]' | grep -o 'YES\|NO' | head -1 || echo "YES")"
+
+    if [ "$ANSWER" = "NO" ]; then
+      GAPS_MEM+=("$mem_file")
+      echo "   📋 갭 발견: $BASENAME ($MEM_DESC)"
+    fi
+  done
+
+  if [ ${#GAPS_MEM[@]} -eq 0 ]; then
+    echo "   ✅ 메모리 갭 없음"
+  else
+    echo ""
+    for mem_file in "${GAPS_MEM[@]}"; do
+      BASENAME="$(basename "$mem_file")"
+      MEM_DESC="$(grep '^description:' "$mem_file" | sed 's/^description: //' | tr -d '"' || echo "$BASENAME")"
+      echo "   ┌─ $BASENAME"
+      echo "   │  $MEM_DESC"
+      echo "   └─"
+
+      if [ -t 0 ]; then
+        read -p "   템플릿에 추가할까요? [y/N]: " CONFIRM
+      else
+        CONFIRM="N"
+      fi
+
+      if [ "$CONFIRM" = "y" ] || [ "$CONFIRM" = "Y" ]; then
+        if [ "$DRY_RUN" = "false" ]; then
+          cp "$mem_file" "$MEMORY_TEMPLATE_DIR/$BASENAME"
+          echo "   ✅ 추가됨: $BASENAME"
+          CHANGED=true
+        else
+          echo "   [dry-run] 추가 예정: $BASENAME"
+        fi
+      else
+        echo "   건너뜀: $BASENAME"
+      fi
+      echo ""
+    done
+  fi
+fi
+
+# ── 자동 커밋 ──────────────────────────────────────────────────────
+if [ "$CHANGED" = "true" ] && [ "$DRY_RUN" = "false" ]; then
+  echo ""
+  echo "━━━ 변경 커밋 ━━━"
+  cd "$COLLAR_HOME"
+  if git diff --quiet && git diff --cached --quiet; then
+    # 작업 디렉토리가 collar 레포가 아닐 수 있으므로 git add 대상 명시
+    echo "   변경 사항 없음 (이미 커밋됨)"
+  else
+    git add templates/global/
+    git commit -m "sync(template): collar-template-sync 실행 — 글로벌 갭 항목 추가"
+    echo "✅ 커밋 완료"
+  fi
+fi
+
+# ── 완료 ──────────────────────────────────────────────────────────
+echo ""
+if [ "$DRY_RUN" = "true" ]; then
+  echo "🔍 dry-run 완료 — 실제 적용: collar-template-sync"
+else
+  echo "🔍 collar-template-sync 완료"
+fi
