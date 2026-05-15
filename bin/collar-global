@@ -1,0 +1,221 @@
+#!/usr/bin/env bash
+# collar-global — 글로벌 규칙/메모리 템플릿을 ~/.claude/CLAUDE.md와 프로젝트 메모리에 병합
+# 사용법: collar-global [--dry-run]
+#
+# 동작:
+#   1. templates/global/CLAUDE.md.rules → ~/.claude/CLAUDE.md (LLM 의미 중복 제거)
+#   2. templates/global/memory/*.md     → 프로젝트 메모리 디렉토리 (LLM 의미 중복 제거)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COLLAR_HOME="${COLLAR_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+
+DRY_RUN=false
+[ "${1:-}" = "--dry-run" ] && DRY_RUN=true
+
+GLOBAL_CLAUDE="$HOME/.claude/CLAUDE.md"
+RULES_TEMPLATE="$COLLAR_HOME/templates/global/CLAUDE.md.rules"
+MEMORY_TEMPLATE_DIR="$COLLAR_HOME/templates/global/memory"
+
+# 현재 프로젝트 메모리 경로 계산 (Claude Code 경로 인코딩: / → -)
+PROJECT_PATH="$(pwd)"
+ENCODED_PATH="$(echo "$PROJECT_PATH" | tr '/' '-')"
+PROJECT_MEMORY_DIR="$HOME/.claude/projects/$ENCODED_PATH/memory"
+
+echo "🌐 collar-global"
+echo "   규칙 템플릿: $RULES_TEMPLATE"
+echo "   메모리 대상: $PROJECT_MEMORY_DIR"
+[ "$DRY_RUN" = "true" ] && echo "   모드: --dry-run (실제 변경 없음)"
+echo ""
+
+# ── LLM 헬퍼 ──────────────────────────────────────────────────────
+CLAUDE_BIN="${CLAUDE_PATH:-/opt/homebrew/bin/claude}"
+
+llm_ask() {
+  local prompt="$1"
+  local result=""
+  if command -v claude >/dev/null 2>&1 || [ -x "$CLAUDE_BIN" ]; then
+    result="$("$CLAUDE_BIN" -p "$prompt" 2>/dev/null)" || true
+  fi
+  if [ -z "$result" ] && command -v gemini >/dev/null 2>&1; then
+    result="$(echo "$prompt" | gemini -p --approval-mode yolo 2>/dev/null)" || true
+  fi
+  echo "$result"
+}
+
+# ── PHASE 1: CLAUDE.md 규칙 병합 ──────────────────────────────────
+echo "━━━ Phase 1: ~/.claude/CLAUDE.md 규칙 병합 ━━━"
+
+if [ ! -f "$RULES_TEMPLATE" ]; then
+  echo "⚠️  규칙 템플릿 없음: $RULES_TEMPLATE"
+else
+  if [ ! -f "$GLOBAL_CLAUDE" ]; then
+    echo "   ~/.claude/CLAUDE.md 없음 → 전체 규칙 추가"
+    if [ "$DRY_RUN" = "false" ]; then
+      mkdir -p "$(dirname "$GLOBAL_CLAUDE")"
+      cat "$RULES_TEMPLATE" >> "$GLOBAL_CLAUDE"
+      echo "✅ 전체 규칙 추가 완료"
+    else
+      echo "   [dry-run] 추가될 내용:"
+      head -20 "$RULES_TEMPLATE"
+    fi
+  else
+    # 섹션별 중복 검사
+    EXISTING_CONTENT="$(cat "$GLOBAL_CLAUDE")"
+
+    # ## 헤더로 섹션 분리
+    SECTIONS=()
+    CURRENT_SECTION=""
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^##[^#] ]]; then
+        [ -n "$CURRENT_SECTION" ] && SECTIONS+=("$CURRENT_SECTION")
+        CURRENT_SECTION="$line"$'\n'
+      else
+        CURRENT_SECTION+="$line"$'\n'
+      fi
+    done < "$RULES_TEMPLATE"
+    [ -n "$CURRENT_SECTION" ] && SECTIONS+=("$CURRENT_SECTION")
+
+    ADDED=0
+    SKIPPED=0
+
+    for section in "${SECTIONS[@]}"; do
+      SECTION_TITLE="$(echo "$section" | head -1)"
+      echo "   검사: $SECTION_TITLE"
+
+      PROMPT="아래 두 텍스트를 비교해라.
+
+[기존 파일]
+$EXISTING_CONTENT
+
+[추가 후보 섹션]
+$section
+
+질문: 기존 파일에 이미 추가 후보 섹션과 같은 의미의 내용이 있는가?
+표현이 달라도 규칙/원칙의 의도가 같으면 중복으로 판단한다.
+반드시 YES 또는 NO 한 단어만 답하라."
+
+      ANSWER="$(llm_ask "$PROMPT" | tr '[:lower:]' '[:upper:]' | grep -o 'YES\|NO' | head -1 || echo "NO")"
+
+      if [ "$ANSWER" = "YES" ]; then
+        echo "   → 중복 (스킵)"
+        SKIPPED=$((SKIPPED + 1))
+      else
+        echo "   → 신규 추가"
+        if [ "$DRY_RUN" = "false" ]; then
+          printf '\n%s' "$section" >> "$GLOBAL_CLAUDE"
+          EXISTING_CONTENT="$(cat "$GLOBAL_CLAUDE")"
+        else
+          echo "   [dry-run] 추가될 섹션:"
+          echo "$section" | head -5
+          echo "   ..."
+        fi
+        ADDED=$((ADDED + 1))
+      fi
+    done
+
+    echo ""
+    echo "   규칙 병합: 추가 ${ADDED}개 / 중복 스킵 ${SKIPPED}개"
+  fi
+fi
+
+# ── PHASE 2: 메모리 템플릿 병합 ────────────────────────────────────
+echo ""
+echo "━━━ Phase 2: 프로젝트 메모리 병합 ━━━"
+
+if [ ! -d "$MEMORY_TEMPLATE_DIR" ]; then
+  echo "⚠️  메모리 템플릿 디렉토리 없음: $MEMORY_TEMPLATE_DIR"
+else
+  if [ "$DRY_RUN" = "false" ]; then
+    mkdir -p "$PROJECT_MEMORY_DIR"
+  fi
+
+  MEMORY_INDEX="$PROJECT_MEMORY_DIR/MEMORY.md"
+  EXISTING_MEMORIES=""
+  if [ -f "$MEMORY_INDEX" ]; then
+    EXISTING_MEMORIES="$(cat "$MEMORY_INDEX")"
+  fi
+
+  MEM_ADDED=0
+  MEM_SKIPPED=0
+
+  for template_file in "$MEMORY_TEMPLATE_DIR"/*.md; do
+    [ -f "$template_file" ] || continue
+    TEMPLATE_CONTENT="$(cat "$template_file")"
+    TEMPLATE_NAME="$(basename "$template_file")"
+
+    # frontmatter에서 description 추출
+    TEMPLATE_DESC="$(grep '^description:' "$template_file" | sed 's/^description: //' | tr -d '"')"
+    TEMPLATE_SLUG="$(grep '^name:' "$template_file" | sed 's/^name: //' | tr -d '"')"
+
+    echo "   검사: $TEMPLATE_NAME ($TEMPLATE_DESC)"
+
+    if [ -z "$EXISTING_MEMORIES" ]; then
+      ANSWER="NO"
+    else
+      # 기존 메모리 파일들 내용 수집
+      EXISTING_MEM_CONTENTS=""
+      for mem_file in "$PROJECT_MEMORY_DIR"/*.md; do
+        [ -f "$mem_file" ] && [ "$(basename "$mem_file")" != "MEMORY.md" ] || continue
+        EXISTING_MEM_CONTENTS+="=== $(basename "$mem_file") ===\n$(cat "$mem_file")\n\n"
+      done
+
+      PROMPT="아래 기존 메모리 파일들과 추가 후보 메모리를 비교해라.
+
+[기존 메모리 파일들]
+$EXISTING_MEM_CONTENTS
+
+[추가 후보 메모리]
+$TEMPLATE_CONTENT
+
+질문: 기존 메모리 파일 중 추가 후보와 같은 의미/규칙을 다루는 것이 있는가?
+반드시 YES 또는 NO 한 단어만 답하라."
+
+      ANSWER="$(llm_ask "$PROMPT" | tr '[:lower:]' '[:upper:]' | grep -o 'YES\|NO' | head -1 || echo "NO")"
+    fi
+
+    if [ "$ANSWER" = "YES" ]; then
+      echo "   → 중복 (스킵)"
+      MEM_SKIPPED=$((MEM_SKIPPED + 1))
+    else
+      echo "   → 신규 추가"
+      TARGET_FILE="$PROJECT_MEMORY_DIR/$TEMPLATE_NAME"
+      if [ "$DRY_RUN" = "false" ]; then
+        cp "$template_file" "$TARGET_FILE"
+        # MEMORY.md 인덱스 업데이트
+        if [ ! -f "$MEMORY_INDEX" ]; then
+          echo "# Memory Index" > "$MEMORY_INDEX"
+          echo "" >> "$MEMORY_INDEX"
+        fi
+        # 이미 인덱스에 있는지 확인 후 추가
+        if ! grep -q "$TEMPLATE_NAME" "$MEMORY_INDEX" 2>/dev/null; then
+          echo "- [$TEMPLATE_DESC]($TEMPLATE_NAME) — $TEMPLATE_DESC" >> "$MEMORY_INDEX"
+        fi
+        EXISTING_MEMORIES="$(cat "$MEMORY_INDEX")"
+      else
+        echo "   [dry-run] 추가될 메모리: $TEMPLATE_NAME"
+      fi
+      MEM_ADDED=$((MEM_ADDED + 1))
+    fi
+  done
+
+  echo ""
+  echo "   메모리 병합: 추가 ${MEM_ADDED}개 / 중복 스킵 ${MEM_SKIPPED}개"
+fi
+
+# ── 완료 ──────────────────────────────────────────────────────────
+echo ""
+if [ "$DRY_RUN" = "true" ]; then
+  echo "🔍 dry-run 완료 (실제 변경 없음)"
+  echo "   실제 적용: collar-global"
+else
+  echo "🌐 collar-global 처리 완료!"
+  echo ""
+  echo "적용 내용:"
+  echo "  ~/.claude/CLAUDE.md  — 글로벌 규칙 병합"
+  echo "  $PROJECT_MEMORY_DIR"
+  echo "                       — 프로젝트 메모리 병합"
+  echo ""
+  echo "새 세션에서 자동 반영됩니다."
+fi

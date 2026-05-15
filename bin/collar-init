@@ -375,6 +375,24 @@ else
   echo "(비대화형 실행: 건너뜀. 수동: collar-github setup $TARGET)"
 fi
 
+# ── collar-global: 글로벌 규칙/메모리 병합 (선택) ────────────────
+echo ""
+echo "━━━ 글로벌 규칙 병합 ━━━"
+if [ -t 0 ]; then
+  read -p "글로벌 AI 규칙을 ~/.claude/CLAUDE.md와 프로젝트 메모리에 병합할까요? [y/N]: " GLOBAL_CONFIRM
+  if [ "$GLOBAL_CONFIRM" = "y" ] || [ "$GLOBAL_CONFIRM" = "Y" ]; then
+    if bash "$COLLAR_INIT_BIN/collar-global"; then
+      echo "✅ 글로벌 규칙 병합 완료"
+    else
+      echo "⚠️  collar-global 실패 — 수동 실행: collar-global"
+    fi
+  else
+    echo "건너뜀 (나중에: collar-global)"
+  fi
+else
+  echo "(비대화형 실행: 건너뜀. 수동: collar-global)"
+fi
+
 # ── 완료 ─────────────────────────────────────────────────────────
 echo ""
 echo "🎉 하네스 설치 완료!"
@@ -383,6 +401,7 @@ echo "확인:"
 echo "  collar-watchdog --status   # watchdog 상태"
 echo "  collar-update --dry-run    # CLAUDE.md 변경 미리보기"
 echo "  collar-github setup        # GitHub 연동 (미설정 시)"
+echo "  collar-global              # 글로벌 규칙/메모리 재병합"
 echo ""
 echo "💡 CLAUDE.md를 대화형으로 완성하려면:"
 echo "  collar-interview            # 7단계 인터뷰 → CLAUDE.md 자동 생성"

@@ -54,7 +54,8 @@ collar/
 │   ├── collar-compact     # 세션 컨텍스트 압축 → session-compact.md
 │   ├── collar-remember    # 세션 중 인사이트 기록 (LLM 자동 글로벌 판단)
 │   ├── collar-update      # CLAUDE.md TODO 항목 AI로 자동 채우기
-│   └── collar-github      # GitHub 이슈 분석 + PR 자동 생성
+│   ├── collar-github      # GitHub 이슈 분석 + PR 자동 생성
+│   └── collar-global      # 글로벌 규칙/메모리 템플릿을 ~/.claude/CLAUDE.md와 프로젝트 메모리에 LLM 중복 제거 후 병합
 ├── templates/             # 다른 프로젝트에 적용할 하네스 템플릿
 │   ├── CLAUDE.md.base         # 공통 헌법 (모든 프로젝트)
 │   ├── AGENTS.md.base         # 에이전트 가이드 템플릿
