@@ -12,21 +12,50 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COLLAR_HOME="${COLLAR_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 
 DRY_RUN=false
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=true
+FORCE=false
+for arg in "$@"; do
+  [ "$arg" = "--dry-run" ] && DRY_RUN=true
+  [ "$arg" = "--force" ]   && FORCE=true
+done
 
 GLOBAL_CLAUDE="$HOME/.claude/CLAUDE.md"
 RULES_TEMPLATE="$COLLAR_HOME/templates/global/CLAUDE.md.rules"
 MEMORY_TEMPLATE_DIR="$COLLAR_HOME/templates/global/memory"
+VERSION_FILE="$HOME/.collar/.global-version"
 
 # 현재 프로젝트 메모리 경로 계산 (Claude Code 경로 인코딩: / → -)
 PROJECT_PATH="$(pwd)"
 ENCODED_PATH="$(echo "$PROJECT_PATH" | tr '/' '-')"
 PROJECT_MEMORY_DIR="$HOME/.claude/projects/$ENCODED_PATH/memory"
 
+# ── 템플릿 해시 계산 ───────────────────────────────────────────────
+_template_hash() {
+  local dir="$COLLAR_HOME/templates/global"
+  if [ ! -d "$dir" ]; then echo "none"; return; fi
+  # macOS: md5 / Linux: md5sum
+  if command -v md5 >/dev/null 2>&1; then
+    find "$dir" -type f | sort | xargs md5 -q 2>/dev/null | md5 -q 2>/dev/null
+  else
+    find "$dir" -type f | sort | xargs md5sum 2>/dev/null | md5sum | cut -d' ' -f1
+  fi
+}
+
+CURRENT_HASH="$(_template_hash)"
+STORED_HASH=""
+[ -f "$VERSION_FILE" ] && STORED_HASH="$(cat "$VERSION_FILE")"
+
+# ── 버전 체크: 최신이면 즉시 종료 ────────────────────────────────
+if [ "$DRY_RUN" = "false" ] && [ "$FORCE" = "false" ] && \
+   [ -n "$CURRENT_HASH" ] && [ "$CURRENT_HASH" = "$STORED_HASH" ]; then
+  echo "✅ collar-global: 이미 최신 버전 ($CURRENT_HASH) — 스킵"
+  exit 0
+fi
+
 echo "🌐 collar-global"
 echo "   규칙 템플릿: $RULES_TEMPLATE"
 echo "   메모리 대상: $PROJECT_MEMORY_DIR"
-[ "$DRY_RUN" = "true" ] && echo "   모드: --dry-run (실제 변경 없음)"
+[ "$DRY_RUN" = "true" ]  && echo "   모드: --dry-run (실제 변경 없음)"
+[ "$FORCE" = "true" ]    && echo "   모드: --force (버전 무시)"
 echo ""
 
 # ── LLM 헬퍼 ──────────────────────────────────────────────────────
@@ -204,18 +233,22 @@ $TEMPLATE_CONTENT
   echo "   메모리 병합: 추가 ${MEM_ADDED}개 / 중복 스킵 ${MEM_SKIPPED}개"
 fi
 
-# ── 완료 ──────────────────────────────────────────────────────────
+# ── 완료 + 버전 파일 기록 ─────────────────────────────────────────
 echo ""
 if [ "$DRY_RUN" = "true" ]; then
   echo "🔍 dry-run 완료 (실제 변경 없음)"
   echo "   실제 적용: collar-global"
 else
+  # 버전 파일 갱신 (다음 세션부터 최신 버전으로 판단)
+  mkdir -p "$(dirname "$VERSION_FILE")"
+  echo "$CURRENT_HASH" > "$VERSION_FILE"
+
   echo "🌐 collar-global 처리 완료!"
+  echo "   버전: $CURRENT_HASH → $VERSION_FILE"
   echo ""
   echo "적용 내용:"
   echo "  ~/.claude/CLAUDE.md  — 글로벌 규칙 병합"
-  echo "  $PROJECT_MEMORY_DIR"
-  echo "                       — 프로젝트 메모리 병합"
+  echo "  $PROJECT_MEMORY_DIR  — 프로젝트 메모리 병합"
   echo ""
-  echo "새 세션에서 자동 반영됩니다."
+  echo "다음 세션부터 자동 체크 (변경 없으면 즉시 스킵)"
 fi

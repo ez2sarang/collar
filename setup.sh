@@ -19,7 +19,8 @@ if [ "${1:-}" = "--uninstall" ]; then
         "$INSTALL_DIR/bin/collar-compact" \
         "$INSTALL_DIR/bin/collar-remember" \
         "$INSTALL_DIR/bin/collar-update" \
-        "$INSTALL_DIR/bin/collar-github"
+        "$INSTALL_DIR/bin/collar-github" \
+        "$INSTALL_DIR/bin/collar-global"
   rm -rf "$INSTALL_DIR/templates"
   echo "✅ bin/ 및 templates/ 제거 완료."
   echo "   ~/.collar/ 디렉토리 자체는 유지됩니다 (프로젝트 데이터 보호)."
@@ -39,8 +40,8 @@ for f in "$SCRIPT_DIR/bin/"*; do
 done
 echo "✅ bin/ 설치 완료 ($(ls "$SCRIPT_DIR/bin/" | wc -l | tr -d ' ')개 도구)"
 
-# templates/ 복사
-cp "$SCRIPT_DIR/templates/"* "$INSTALL_DIR/templates/"
+# templates/ 복사 (서브디렉토리 포함)
+cp -r "$SCRIPT_DIR/templates/"* "$INSTALL_DIR/templates/"
 echo "✅ templates/ 설치 완료"
 
 # ── PATH 안내 ─────────────────────────────────────────────────────────

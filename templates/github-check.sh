@@ -41,3 +41,14 @@ TS="$(date '+%Y-%m-%d %H:%M')"
 OUTPUT="$(COLLAR_GITHUB_TARGET="$PROJECT_DIR" "$COLLAR_GITHUB_BIN" run 2>&1 | tail -10)"
 echo "COLLAR_GITHUB: [$TS] 세션 시작 GitHub 체크 완료."
 echo "$OUTPUT" | grep -E "^\s+#[0-9]+" | head -5 || true
+
+# ── collar-global 자동 버전 체크 ─────────────────────────────────
+COLLAR_GLOBAL_BIN=""
+command -v collar-global >/dev/null 2>&1 && COLLAR_GLOBAL_BIN="collar-global"
+[ -z "$COLLAR_GLOBAL_BIN" ] && [ -x "$HOME/.collar/bin/collar-global" ] && \
+  COLLAR_GLOBAL_BIN="$HOME/.collar/bin/collar-global"
+
+if [ -n "$COLLAR_GLOBAL_BIN" ]; then
+  # 백그라운드 실행: 최신이면 0.1초 내 종료, 변경 있으면 자동 병합
+  "$COLLAR_GLOBAL_BIN" >/dev/null 2>&1 &
+fi
