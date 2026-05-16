@@ -231,6 +231,25 @@ MEMORY_EOF
   echo "✅ .collar/memory.md 생성 (프로젝트 메모리)"
 fi
 
+# ── .collar/hooks 설치 (collar-hooks 템플릿) ─────────────────────
+mkdir -p "$TARGET/.collar/hooks"
+HOOKS_SRC="$COLLAR_HOME/templates/collar-hooks"
+HOOKS_INSTALLED=0
+
+if [ -d "$HOOKS_SRC" ]; then
+  for hook_file in "$HOOKS_SRC"/*.sh; do
+    [ -f "$hook_file" ] || continue
+    hook_name="$(basename "$hook_file")"
+    hook_dest="$TARGET/.collar/hooks/$hook_name"
+    if [ ! -f "$hook_dest" ]; then
+      cp "$hook_file" "$hook_dest"
+      chmod +x "$hook_dest"
+      HOOKS_INSTALLED=$((HOOKS_INSTALLED + 1))
+    fi
+  done
+  [ "$HOOKS_INSTALLED" -gt 0 ] && echo "✅ .collar/hooks 설치: ${HOOKS_INSTALLED}개 훅"
+fi
+
 # ── 글로벌 룰 승격 체크 ────────────────────────────────────────────
 GLOBAL_CLAUDE="$HOME/.claude/CLAUDE.md"
 
