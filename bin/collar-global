@@ -113,19 +113,13 @@ else
       SECTION_TITLE="$(echo "$section" | head -1)"
       echo "   검사: $SECTION_TITLE"
 
-      PROMPT="아래 두 텍스트를 비교해라.
-
-[기존 파일]
-$EXISTING_CONTENT
-
-[추가 후보 섹션]
-$section
-
-질문: 기존 파일에 이미 추가 후보 섹션과 같은 의미의 내용이 있는가?
-표현이 달라도 규칙/원칙의 의도가 같으면 중복으로 판단한다.
-반드시 YES 또는 NO 한 단어만 답하라."
-
-      ANSWER="$(llm_ask "$PROMPT" | tr '[:lower:]' '[:upper:]' | grep -o 'YES\|NO' | head -1 || echo "NO")"
+      # LLM 없이 섹션 제목으로 중복 체크 (토큰 절감)
+      TITLE_KEYWORD="$(echo "$SECTION_TITLE" | sed 's/^## //' | cut -c1-30)"
+      if echo "$EXISTING_CONTENT" | grep -qF "$TITLE_KEYWORD" 2>/dev/null; then
+        ANSWER="YES"
+      else
+        ANSWER="NO"
+      fi
 
       if [ "$ANSWER" = "YES" ]; then
         echo "   → 중복 (스킵)"
@@ -180,28 +174,12 @@ else
 
     echo "   검사: $TEMPLATE_NAME ($TEMPLATE_DESC)"
 
-    if [ -z "$EXISTING_MEMORIES" ]; then
-      ANSWER="NO"
+    # LLM 없이 파일명으로 중복 체크 (토큰 절감)
+    # 같은 파일명이 이미 있으면 중복, 없으면 신규
+    if [ -f "$PROJECT_MEMORY_DIR/$TEMPLATE_NAME" ]; then
+      ANSWER="YES"
     else
-      # 기존 메모리 파일들 내용 수집
-      EXISTING_MEM_CONTENTS=""
-      for mem_file in "$PROJECT_MEMORY_DIR"/*.md; do
-        [ -f "$mem_file" ] && [ "$(basename "$mem_file")" != "MEMORY.md" ] || continue
-        EXISTING_MEM_CONTENTS+="=== $(basename "$mem_file") ===\n$(cat "$mem_file")\n\n"
-      done
-
-      PROMPT="아래 기존 메모리 파일들과 추가 후보 메모리를 비교해라.
-
-[기존 메모리 파일들]
-$EXISTING_MEM_CONTENTS
-
-[추가 후보 메모리]
-$TEMPLATE_CONTENT
-
-질문: 기존 메모리 파일 중 추가 후보와 같은 의미/규칙을 다루는 것이 있는가?
-반드시 YES 또는 NO 한 단어만 답하라."
-
-      ANSWER="$(llm_ask "$PROMPT" | tr '[:lower:]' '[:upper:]' | grep -o 'YES\|NO' | head -1 || echo "NO")"
+      ANSWER="NO"
     fi
 
     if [ "$ANSWER" = "YES" ]; then
