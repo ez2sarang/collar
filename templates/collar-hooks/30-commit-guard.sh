@@ -66,12 +66,25 @@ git rev-parse --git-dir >/dev/null 2>&1 || exit 0
 
 # 미커밋 변경 감지
 UNCOMMITTED="$(git status --porcelain 2>/dev/null | grep -v '^??' || true)"
-[ -z "$UNCOMMITTED" ] && exit 0
 
-# 변경된 파일 수
-CHANGED_COUNT="$(echo "$UNCOMMITTED" | grep -c . || echo 0)"
+# 미push 커밋 감지
+UNPUSHED="$(git log @{u}..HEAD --oneline 2>/dev/null || true)"
+
+# 둘 다 없으면 조용히 종료
+[ -z "$UNCOMMITTED" ] && [ -z "$UNPUSHED" ] && exit 0
 
 TS="$(date '+%Y-%m-%d %H:%M')"
-echo "COLLAR_COMMITGUARD: [$TS] 미커밋 변경 ${CHANGED_COUNT}개 감지."
-echo "  규칙: 작업 완료 후 반드시 커밋. '완료'를 선언하기 전에 git commit을 실행하라."
-echo "  변경 파일: $(echo "$UNCOMMITTED" | head -3 | awk '{print $2}' | tr '\n' ', ' | sed 's/,$//')"
+
+if [ -n "$UNCOMMITTED" ]; then
+  CHANGED_COUNT="$(echo "$UNCOMMITTED" | grep -c . || echo 0)"
+  echo "COLLAR_COMMITGUARD: [$TS] 미커밋 변경 ${CHANGED_COUNT}개 감지."
+  echo "  규칙: 작업 완료 후 반드시 커밋. '완료'를 선언하기 전에 git commit을 실행하라."
+  echo "  변경 파일: $(echo "$UNCOMMITTED" | head -3 | awk '{print $2}' | tr '\n' ', ' | sed 's/,$//')"
+fi
+
+if [ -n "$UNPUSHED" ]; then
+  UNPUSHED_COUNT="$(echo "$UNPUSHED" | grep -c . || echo 0)"
+  echo "COLLAR_COMMITGUARD: [$TS] 미push 커밋 ${UNPUSHED_COUNT}개 감지."
+  echo "  규칙: 커밋 후 반드시 push. 테스트 완료 시 git push origin 실행하라."
+  echo "  커밋: $(echo "$UNPUSHED" | head -3 | tr '\n' '|' | sed 's/|$//')"
+fi

@@ -114,8 +114,14 @@ USE_MSG_FALLBACK=false
 
 if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
   TRANSCRIPT_BYTES="$(wc -c < "$TRANSCRIPT" 2>/dev/null || echo 0)"
-  # 200K tokens at 4.5 bytes/token = 900000 bytes
-  CTX_PCT="$(python3 -c "print(int($TRANSCRIPT_BYTES * 100 / 900000))" 2>/dev/null || echo 0)"
+  # compact 이후 delta로 ctx% 계산 (절대값 사용 시 compact 후에도 100% 오탐 발생)
+  BASELINE_FILE="$COLLAR_DIR/.transcript-baseline"
+  BASELINE_BYTES=0
+  [ -f "$BASELINE_FILE" ] && BASELINE_BYTES="$(cat "$BASELINE_FILE" 2>/dev/null || echo 0)"
+  DELTA_BYTES=$(( TRANSCRIPT_BYTES - BASELINE_BYTES ))
+  [ "$DELTA_BYTES" -lt 0 ] && DELTA_BYTES=0
+  # 200K tokens at 4.5 bytes/token = 900000 bytes (compact 이후 누적분만 측정)
+  CTX_PCT="$(python3 -c "print(int($DELTA_BYTES * 100 / 900000))" 2>/dev/null || echo 0)"
   # 100% 초과 클램핑
   [ "$CTX_PCT" -gt 100 ] 2>/dev/null && CTX_PCT=100
 else
@@ -163,6 +169,11 @@ touch "$LOCK_FILE"
 
 # compact 실행 (프로젝트 디렉토리 기준)
 cd "$PROJECT_DIR" && "$COLLAR_COMPACT_BIN" 2>/dev/null
+
+# compact 직후 transcript baseline 저장 (다음 ctx% 계산 기준점)
+if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
+  wc -c < "$TRANSCRIPT" 2>/dev/null > "$COLLAR_DIR/.transcript-baseline" || true
+fi
 
 # 카운터 리셋 (폴백 모드일 때)
 [ "$USE_MSG_FALLBACK" = "true" ] && echo "0" > "$COUNTER_FILE"
