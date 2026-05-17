@@ -1,11 +1,15 @@
 import { existsSync, mkdirSync, copyFileSync, readdirSync } from 'fs';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import chalk from 'chalk';
 import {
   COLLAR_HOME, COLLAR_SKILLS_DIR, COLLAR_PROMPTS_DIR, COLLAR_HOOKS_DIR,
   GLOBAL_SETTINGS_JSON, PACKAGE_SKILLS_DIR, PACKAGE_PROMPTS_DIR,
 } from '../utils/paths.js';
 import { mergeSettings } from '../utils/settings.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 export async function setup(): Promise<void> {
   console.log(chalk.bold('🎯 collar setup'));
@@ -41,8 +45,17 @@ export async function setup(): Promise<void> {
     console.log(chalk.yellow('⚠️  prompts/ 디렉토리 없음'));
   }
 
-  // 3. ~/.collar/hooks/ 생성
+  // 3. ~/.collar/hooks/ 생성 + keyword-trigger.mjs 복사
   mkdirSync(COLLAR_HOOKS_DIR, { recursive: true });
+  // dist/hooks/keyword-trigger.js → ~/.collar/hooks/keyword-trigger.mjs
+  const hookSrc = join(__dirname, '..', 'hooks', 'keyword-trigger.js');
+  const hookDest = join(COLLAR_HOOKS_DIR, 'keyword-trigger.mjs');
+  if (existsSync(hookSrc)) {
+    copyFileSync(hookSrc, hookDest);
+    console.log(chalk.green('✅ ~/.collar/hooks/keyword-trigger.mjs 설치'));
+  } else {
+    console.log(chalk.yellow('⚠️  keyword-trigger.js 빌드 파일 없음 (npm run build 필요)'));
+  }
 
   // 4. ~/.claude/settings.json에 MCP 서버 등록 (딥 머지)
   mergeSettings(GLOBAL_SETTINGS_JSON, {
