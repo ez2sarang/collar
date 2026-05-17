@@ -901,14 +901,14 @@ exit 0: 정상, exit 1: 블록 (사용 주의)
 ### 15-A. 전체 4계층 아키텍처 (architecture-v2.md 기반)
 
 ```
-LAYER 4: Paperclip / PaperCompany UI (목표/미션, 거버넌스)
-LAYER 3: Paperclip Control Plane (태스크, 예산, 에이전트 관리)
+LAYER 4: Paperclip / PaperCompany UI    ← TODO (미구현)
+LAYER 3: Paperclip Control Plane        ← TODO (미구현)
 LAYER 2: collar npm (하네스 프레임워크) ← 이 설계서의 범위
 LAYER 1: Claude Code (실행 환경)
 ```
 
-collar npm은 Layer 2다. Layer 1(Claude Code)을 직접 대체하지 않는다.  
-향후 Paperclip(Layer 3/4) 연동은 `collar-plugin` 인터페이스로 처리 (15-C 참조).
+**이 설계서 구현 범위: Layer 2만.**  
+Layer 3/4는 Paperclip이 구현되는 시점에 별도 설계.
 
 ### 15-B. gstack 실제 구조 및 대체 전략
 
@@ -943,24 +943,20 @@ collar npm은 Layer 2다. Layer 1(Claude Code)을 직접 대체하지 않는다.
 - `collar setup` 실행 시 기존 gstack 스킬은 유지 (즉시 제거 금지, 호환성 유지)
 - gstack learnings → `.collar/state/learnings.jsonl` 으로 마이그레이션 (`collar migrate-gstack` 명령 추가)
 
-### 15-C. 플러그인 아키텍처 (v3 계획 반영)
+### 15-C. 플러그인 아키텍처 (TODO — Paperclip 구현 후)
 
-architecture-v2.md에서 v3 계획으로 명시된 `collar-plugin` 인터페이스:
+> **현재 Paperclip 미구현. 이 섹션은 향후 계획으로만 남긴다. 구현하지 않는다.**
 
 ```
+# 미래 구조 (참고용)
 ~/.collar/plugins/
-└── paperclip/           # Paperclip collar 플러그인 (미래)
-    ├── plugin.json      # 플러그인 메타데이터
-    ├── hooks/           # collar 훅 확장
-    └── commands/        # collar 명령어 확장
+└── paperclip/           # Paperclip 구현 완료 후 설계
+    ├── plugin.json
+    ├── hooks/
+    └── commands/
 ```
 
-**collar npm Phase 1에서 준비할 것:**
-- `collar plugin list` — 설치된 플러그인 목록
-- `collar plugin install <name>` — 플러그인 설치
-- 플러그인이 MCP 도구를 추가하거나 스킬을 등록할 수 있는 인터페이스
-
-**현재는 플러그인 없이 시작, 인터페이스만 설계.**
+Paperclip이 실제로 구현되는 시점에 별도 설계서 작성.
 
 ### 15-D. gstack learnings → collar 메모리 마이그레이션 명령
 
@@ -1023,9 +1019,8 @@ Phase 3b: gstack 대체 스킬 (ship/qa/review/investigate)
   → gstack 스킬 분석 후 collar 버전으로 이식
   → collar migrate-gstack 마이그레이션 명령
 
-Phase 4 (선택): Paperclip 플러그인 인터페이스
-  → collar plugin 명령어
-  → paperclip plugin 연동
+Phase 4 (TODO — Paperclip 구현 완료 후): 플러그인 인터페이스
+  → Paperclip이 실제 구현될 때 별도 설계
 ```
 
 ---
