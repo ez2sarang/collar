@@ -894,4 +894,140 @@ exit 0: 정상, exit 1: 블록 (사용 주의)
 
 ---
 
+---
+
+## 15. 기존 문서 기반 보완 (2026-05-17 추가)
+
+### 15-A. 전체 4계층 아키텍처 (architecture-v2.md 기반)
+
+```
+LAYER 4: Paperclip / PaperCompany UI (목표/미션, 거버넌스)
+LAYER 3: Paperclip Control Plane (태스크, 예산, 에이전트 관리)
+LAYER 2: collar npm (하네스 프레임워크) ← 이 설계서의 범위
+LAYER 1: Claude Code (실행 환경)
+```
+
+collar npm은 Layer 2다. Layer 1(Claude Code)을 직접 대체하지 않는다.  
+향후 Paperclip(Layer 3/4) 연동은 `collar-plugin` 인터페이스로 처리 (15-C 참조).
+
+### 15-B. gstack 실제 구조 및 대체 전략
+
+**현재 설치 상태:**
+- `~/.claude/skills/gstack/` — gstack 스킬 시스템 (ship, qa, review, investigate, land-and-deploy 등)
+- `~/.claude/skills/ralph/`, `~/.claude/skills/ralplan/`, `~/.claude/skills/deep-interview/` 등 — OMC 스킬 (이미 설치됨)
+- `~/.gstack/projects/{slug}/learnings.jsonl` — gstack learnings (프로젝트별 운영 인사이트)
+
+**gstack이 제공하는 것 (harness-system-plan.md 기반):**
+
+| gstack 스킬 | 역할 | collar npm 대체 방안 |
+|------------|------|---------------------|
+| `/ship` | 배포 파이프라인 | `$collar-ship` 스킬 (Phase 3 추가) |
+| `/qa` | QA 워크플로우 | `$collar-qa` 스킬 (Phase 3 추가) |
+| `/review` | 코드 리뷰 | `$collar-review` 스킬 (Phase 3 추가) |
+| `/investigate` | 버그 조사 | `$collar-investigate` 스킬 (Phase 3 추가) |
+| `gstack-learnings-log` | 운영 인사이트 기록 | `collar_state_write` MCP 도구로 대체 |
+| `gstack-learnings-search` | 인사이트 검색 | `.collar/memory.md` + MCP `collar_state_read` |
+| `gstack-brain` | GitHub 크로스머신 동기화 | Phase 4 (원격 MCP 또는 git sync) |
+
+**gstack이 못 잡은 결함 (이미 collar가 해결한 것):**
+
+| gstack 결함 | collar 해결책 |
+|------------|--------------|
+| 검증 체크포인트 없음 | `collar_gate_check` MCP 도구 |
+| STARTED/TESTED/VERIFIED 구분 없음 | 완료 3단계 프로토콜 (CLAUDE.md.rules) |
+| 모호성 가드 없음 | `$deep-interview` 스킬 |
+| 재발 버그 체크 없음 | 재발 버그 체크 규칙 (CLAUDE.md.rules) |
+
+**대체 전략:**
+- Phase 3에서 gstack 핵심 스킬(/ship, /qa, /review, /investigate)을 collar 스킬로 이식
+- `collar setup` 실행 시 기존 gstack 스킬은 유지 (즉시 제거 금지, 호환성 유지)
+- gstack learnings → `.collar/state/learnings.jsonl` 으로 마이그레이션 (`collar migrate-gstack` 명령 추가)
+
+### 15-C. 플러그인 아키텍처 (v3 계획 반영)
+
+architecture-v2.md에서 v3 계획으로 명시된 `collar-plugin` 인터페이스:
+
+```
+~/.collar/plugins/
+└── paperclip/           # Paperclip collar 플러그인 (미래)
+    ├── plugin.json      # 플러그인 메타데이터
+    ├── hooks/           # collar 훅 확장
+    └── commands/        # collar 명령어 확장
+```
+
+**collar npm Phase 1에서 준비할 것:**
+- `collar plugin list` — 설치된 플러그인 목록
+- `collar plugin install <name>` — 플러그인 설치
+- 플러그인이 MCP 도구를 추가하거나 스킬을 등록할 수 있는 인터페이스
+
+**현재는 플러그인 없이 시작, 인터페이스만 설계.**
+
+### 15-D. gstack learnings → collar 메모리 마이그레이션 명령
+
+`collar migrate-gstack` (collar setup 시 옵션으로 제공):
+
+```
+1. ~/.gstack/projects/ 아래 모든 learnings.jsonl 탐색
+2. 각 insight를 .collar/memory.md 형식으로 변환
+3. ~/.claude/projects/*/memory/ 에 복사
+```
+
+변환 매핑:
+```json
+// gstack 형식
+{"skill":"gstack","type":"operational","key":"xxx","insight":"yyy","confidence":8}
+
+// collar 형식 (feedback 타입 메모리)
+---
+name: gstack-xxx
+description: yyy
+metadata:
+  type: feedback
+---
+yyy (confidence: 8, migrated from gstack)
+```
+
+### 15-E. Phase 3 스킬 목록 확장 (gstack 대체 포함)
+
+기존 설계 (3개) + gstack 대체 (4개):
+
+| 스킬 | 키워드 | 원본 | 우선순위 |
+|------|--------|------|---------|
+| `$ralph` | `$ralph`, `don't stop` | OMC | ★★★ |
+| `$ralplan` | `$ralplan` | OMC | ★★★ |
+| `$deep-interview` | `$deep-interview`, `interview me` | OMC | ★★ |
+| `$collar-ship` | `$ship`, `배포해줘` | gstack `/ship` 대체 | ★★★ |
+| `$collar-qa` | `$qa`, `테스트해줘` | gstack `/qa` 대체 | ★★★ |
+| `$collar-review` | `$review`, `리뷰해줘` | gstack `/review` 대체 | ★★ |
+| `$collar-investigate` | `$investigate`, `조사해줘` | gstack `/investigate` 대체 | ★★ |
+
+### 15-F. 수정된 구현 순서
+
+gstack 대체를 포함한 실제 구현 우선순위:
+
+```
+Phase 1: npm CLI 기반 구축
+  → collar setup / init / doctor / update / global
+  → gstack 공존 (제거 안 함)
+
+Phase 2: 로컬 stdio MCP 서버
+  → collar_state_read/write/clear
+  → collar_gate_check (강제 검증)
+  → collar_spawn_agent (역할 주입)
+
+Phase 3a: OMC 스킬 (ralph/ralplan/deep-interview)
+  → 키워드 훅 구현
+  → ~/.collar/skills/ 에 설치 (OMC 스킬과 공존)
+
+Phase 3b: gstack 대체 스킬 (ship/qa/review/investigate)
+  → gstack 스킬 분석 후 collar 버전으로 이식
+  → collar migrate-gstack 마이그레이션 명령
+
+Phase 4 (선택): Paperclip 플러그인 인터페이스
+  → collar plugin 명령어
+  → paperclip plugin 연동
+```
+
+---
+
 *이 문서는 2026-05-17 세션에서 작성됨. 다음 세션에서 이 문서 단독으로 구현 시작.*
