@@ -75,48 +75,74 @@ export async function globalCmd(options: GlobalOptions): Promise<void> {
     }
   }
 
-  // Phase 2: 프로젝트 메모리 병합
-  console.log('\n━━━ Phase 2: 프로젝트 메모리 병합 ━━━');
+  // Phase 2: 모든 collar 프로젝트 메모리 병합
+  console.log('\n━━━ Phase 2: 프로젝트 메모리 병합 (전체 collar 프로젝트) ━━━');
   if (!existsSync(memoryTemplateDir)) {
     console.log(chalk.yellow(`⚠️  메모리 템플릿 디렉토리 없음: ${memoryTemplateDir}`));
   } else {
-    // 현재 프로젝트 경로 인코딩
-    const projectPath = process.cwd();
-    const encodedPath = projectPath.replace(/\//g, '-');
-    const projectMemoryDir = join(process.env['HOME'] ?? '', '.claude', 'projects', encodedPath, 'memory');
-
-    if (!dryRun) mkdirSync(projectMemoryDir, { recursive: true });
-
-    const memoryIndex = join(projectMemoryDir, 'MEMORY.md');
     const templateFiles = readdirSync(memoryTemplateDir).filter(f => f.endsWith('.md'));
-    let memAdded = 0, memSkipped = 0;
 
-    for (const templateFile of templateFiles) {
-      const src = join(memoryTemplateDir, templateFile);
-      const dest = join(projectMemoryDir, templateFile);
+    // collar 관리 프로젝트 탐색 (find ~/Documents/dev -name ".collar" -type d)
+    const { execSync } = await import('child_process');
+    let collarProjects: string[] = [];
+    try {
+      const findOutput = execSync(
+        `find "${process.env['HOME'] ?? ''}/Documents/dev" -name ".collar" -type d 2>/dev/null`,
+        { encoding: 'utf-8' }
+      ).trim();
+      collarProjects = findOutput.split('\n').filter(Boolean).map(p => p.replace('/.collar', ''));
+    } catch { /* fallback: 현재 프로젝트만 */ }
 
-      if (existsSync(dest)) {
-        console.log(chalk.gray(`   중복 스킵: ${templateFile}`));
-        memSkipped++;
-      } else {
-        console.log(chalk.blue(`   신규 추가: ${templateFile}`));
-        if (!dryRun) {
-          copyFileSync(src, dest);
-          // MEMORY.md 인덱스 업데이트
-          const templateContent = readFileSync(src, 'utf-8');
-          const desc = extractFrontmatter(templateContent, 'description') ?? templateFile;
-          if (!existsSync(memoryIndex)) {
-            writeFileSync(memoryIndex, '# Memory Index\n\n', 'utf-8');
-          }
-          const indexContent = readFileSync(memoryIndex, 'utf-8');
-          if (!indexContent.includes(templateFile)) {
-            writeFileSync(memoryIndex, indexContent + `- [${desc}](${templateFile}) — ${desc}\n`, 'utf-8');
-          }
-        }
-        memAdded++;
-      }
+    // 현재 프로젝트도 포함 (Documents/dev 밖에 있는 경우 대비)
+    const currentProject = process.cwd();
+    if (!collarProjects.includes(currentProject)) {
+      collarProjects.push(currentProject);
     }
-    console.log(`\n   메모리 병합: 추가 ${memAdded}개 / 중복 스킵 ${memSkipped}개`);
+
+    console.log(`   대상 프로젝트: ${collarProjects.length}개`);
+    let totalAdded = 0, totalSkipped = 0;
+
+    for (const projectDir of collarProjects) {
+      const projectName = projectDir.split('/').pop() ?? projectDir;
+      const encodedPath = projectDir.replace(/\//g, '-');
+      const projectMemoryDir = join(process.env['HOME'] ?? '', '.claude', 'projects', encodedPath, 'memory');
+
+      if (!dryRun) mkdirSync(projectMemoryDir, { recursive: true });
+
+      const memoryIndex = join(projectMemoryDir, 'MEMORY.md');
+      let memAdded = 0, memSkipped = 0;
+
+      for (const templateFile of templateFiles) {
+        const src = join(memoryTemplateDir, templateFile);
+        const dest = join(projectMemoryDir, templateFile);
+
+        if (existsSync(dest)) {
+          memSkipped++;
+        } else {
+          if (!dryRun) {
+            copyFileSync(src, dest);
+            const templateContent = readFileSync(src, 'utf-8');
+            const desc = extractFrontmatter(templateContent, 'description') ?? templateFile;
+            if (!existsSync(memoryIndex)) {
+              writeFileSync(memoryIndex, '# Memory Index\n\n', 'utf-8');
+            }
+            const indexContent = readFileSync(memoryIndex, 'utf-8');
+            if (!indexContent.includes(templateFile)) {
+              writeFileSync(memoryIndex, indexContent + `- [${desc}](${templateFile}) — ${desc}\n`, 'utf-8');
+            }
+          }
+          memAdded++;
+        }
+      }
+
+      const status = memAdded > 0
+        ? chalk.blue(`추가 ${memAdded}개`)
+        : chalk.gray(`스킵 ${memSkipped}개`);
+      console.log(`   ${projectName}: ${status}`);
+      totalAdded += memAdded;
+      totalSkipped += memSkipped;
+    }
+    console.log(`\n   메모리 병합 합계: 추가 ${totalAdded}개 / 중복 스킵 ${totalSkipped}개`);
   }
 
   // 버전 파일 갱신
