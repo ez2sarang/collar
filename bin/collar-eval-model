@@ -1,0 +1,377 @@
+#!/usr/bin/env bash
+# collar-eval-model — LLM 모델 카테고리 적합도 평가
+#
+# 브랜드/버전 무관하게 모델 자체를 4개 차원으로 평가해
+# collar 카테고리 라우팅 (simple/standard/complex) 배치를 결정한다.
+#
+# 사용법:
+#   collar-eval-model <model-id>
+#   collar-eval-model --compare <model-a> <model-b> [model-c...]
+#   collar-eval-model --list
+#   collar-eval-model --report
+#
+# 예시:
+#   collar-eval-model claude-haiku-4-5-20251001
+#   collar-eval-model --compare claude-haiku-4-5-20251001 claude-sonnet-4-6
+#   collar-eval-model --report   # 저장된 결과 요약
+
+set -euo pipefail
+
+COLLAR_HOME="${COLLAR_HOME:-$HOME/.collar}"
+EVAL_DIR="$COLLAR_HOME/eval-results"
+JUDGE_MODEL="claude-haiku-4-5-20251001"
+TODAY="$(date +%Y-%m-%d)"
+mkdir -p "$EVAL_DIR"
+
+die() { echo "❌ $*" >&2; exit 1; }
+log() { echo "  $*"; }
+
+# ── Claude 바이너리 탐지 ──────────────────────────────────────────
+find_claude() {
+  for p in /opt/homebrew/bin/claude /usr/local/bin/claude "$HOME/.local/bin/claude"; do
+    [ -x "$p" ] && echo "$p" && return
+  done
+  # nvm/fnm
+  find "$HOME/.nvm" "$HOME/.local/share/fnm" -name "claude" -type f 2>/dev/null | head -1 || true
+}
+
+CLAUDE_BIN="$(find_claude)"
+[ -n "$CLAUDE_BIN" ] || die "claude CLI를 찾을 수 없습니다. Claude Code 설치 확인."
+
+# ── 테스트 태스크 ────────────────────────────────────────────────
+# 각 태스크는 실제 업무를 압축한 것으로, 브랜드 무관하게 모델 자체를 평가한다.
+
+TASK_SIMPLE='Fix the 3 typos in this Python function. Output ONLY the corrected code block, nothing else.
+
+```python
+def caculate_totall(items):
+    resualt = 0
+    for item in items:
+        resualt += item.prise
+    return resualt
+```'
+
+TASK_STANDARD='Fix the bug in this JavaScript function. Output ONLY: (1) the fixed function, (2) a one-sentence comment starting with "Fix:".
+
+```javascript
+function safeParseInt(input) {
+    return parseInt(input);
+}
+// Bug: returns NaN for "", null, undefined — should return 0
+```'
+
+TASK_COMPLEX='You are designing a caching layer for a user profile API.
+Constraints: ~50k req/min, data changes ~5 times/day per user, Redis available.
+
+Output a structured design covering exactly these 5 points (label each):
+1. Cache key strategy
+2. TTL policy
+3. Invalidation approach
+4. Concurrent write handling
+5. Failure fallback
+
+Max 350 words. Be concrete and specific.'
+
+TASK_FORMAT='Output EXACTLY this JSON with correct values. No markdown, no explanation, no other text:
+{"capital_of_france": "?", "square_root_of_144": "?", "python_year_created": "?"}'
+
+# ── 단일 모델 실행 ──────────────────────────────────────────────
+run_task() {
+  local model="$1" prompt="$2"
+  local t_start t_end ms output
+
+  t_start=$(python3 -c "import time; print(int(time.time()*1000))")
+  output=$("$CLAUDE_BIN" -p --model "$model" "$prompt" 2>/dev/null || echo "ERROR: model invocation failed")
+  t_end=$(python3 -c "import time; print(int(time.time()*1000))")
+  ms=$((t_end - t_start))
+
+  # 출력과 시간을 구분자로 합쳐서 반환
+  printf '%s\n__MS__%d\n' "$output" "$ms"
+}
+
+split_output() { echo "$1" | grep -v '^__MS__'; }
+split_ms()     { echo "$1" | grep '^__MS__' | cut -c7-; }
+
+# ── Judge 모델 채점 ──────────────────────────────────────────────
+judge_score() {
+  local task_type="$1" response="$2" criteria="$3"
+  "$CLAUDE_BIN" -p --model "$JUDGE_MODEL" \
+"You are a strict automated code review judge. Score this AI response.
+Task type: $task_type
+Scoring criteria: $criteria
+
+Response:
+---
+${response:0:800}
+---
+
+Output ONLY valid JSON (no markdown): {\"score\": <integer 0-10>, \"reason\": \"<max 8 words>\"}" 2>/dev/null \
+    || echo '{"score": 5, "reason": "judge unavailable"}'
+}
+
+extract_score()  { python3 -c "
+import json,re,sys
+m=re.search(r'\{[^}]+\}','$1',re.DOTALL)
+print(json.loads(m.group()).get('score',5) if m else 5)" 2>/dev/null || echo 5; }
+
+extract_reason() { python3 -c "
+import json,re,sys
+raw='''$1'''
+m=re.search(r'\{[^}]+\}',raw,re.DOTALL)
+print(json.loads(m.group()).get('reason','') if m else '')" 2>/dev/null || echo ""; }
+
+# ── 속도 점수 (ms → 0-10, 역비례) ───────────────────────────────
+# 2000ms=10점 / 8000ms=5점 / 20000ms=0점
+speed_score() {
+  python3 -c "
+ms=int('${1:-10000}')
+score=max(0,min(10,round(10-(ms-2000)/1800)))
+print(score)" 2>/dev/null || echo 5
+}
+
+# ── 카테고리 추천 로직 ──────────────────────────────────────────
+recommend_category() {
+  python3 -c "
+s_total=$1; t_total=$2; c_total=$3
+
+# 카테고리별 적합도: 가중 합산
+# simple: 품질 60% + 속도 40% → 빠른 게 핵심
+# standard: 균형
+# complex: 품질 85% + 속도 15% → 깊이가 핵심
+cats = {
+  'simple':   s_total * 1.3 - c_total * 0.2,
+  'standard': t_total * 1.0,
+  'complex':  c_total * 1.3 - s_total * 0.1,
+}
+best = max(cats, key=cats.get)
+print(best)
+"
+}
+
+# ── 단일 모델 평가 ────────────────────────────────────────────────
+eval_single() {
+  local model="$1"
+  local safe_name="${model//\//_}"
+  local result_file="$EVAL_DIR/${safe_name}_${TODAY}.json"
+
+  echo ""
+  echo "━━━ collar eval-model: $model ━━━"
+  echo ""
+
+  log "1/4 SIMPLE 테스트 중..."
+  SIMPLE_RAW="$(run_task "$model" "$TASK_SIMPLE")"
+  SIMPLE_OUT="$(split_output "$SIMPLE_RAW")"
+  SIMPLE_MS="$(split_ms "$SIMPLE_RAW")"
+
+  log "2/4 STANDARD 테스트 중..."
+  STD_RAW="$(run_task "$model" "$TASK_STANDARD")"
+  STD_OUT="$(split_output "$STD_RAW")"
+  STD_MS="$(split_ms "$STD_RAW")"
+
+  log "3/4 COMPLEX 테스트 중..."
+  CPX_RAW="$(run_task "$model" "$TASK_COMPLEX")"
+  CPX_OUT="$(split_output "$CPX_RAW")"
+  CPX_MS="$(split_ms "$CPX_RAW")"
+
+  log "4/4 FORMAT 테스트 중..."
+  FMT_RAW="$(run_task "$model" "$TASK_FORMAT")"
+  FMT_OUT="$(split_output "$FMT_RAW")"
+  FMT_MS="$(split_ms "$FMT_RAW")"
+
+  echo ""
+  log "🤖 judge ($JUDGE_MODEL) 채점 중..."
+
+  S_JUDGE="$(judge_score "simple"   "$SIMPLE_OUT" "All 3 typos fixed, nothing extra added, valid Python")"
+  T_JUDGE="$(judge_score "standard" "$STD_OUT"    "Correct NaN/empty fix, has Fix: comment, clean code")"
+  C_JUDGE="$(judge_score "complex"  "$CPX_OUT"    "All 5 labeled sections present, concrete details, under 350 words")"
+  F_JUDGE="$(judge_score "format"   "$FMT_OUT"    "Pure JSON only, all 3 keys, factually correct values")"
+
+  S_SCORE="$(extract_score "$S_JUDGE")"
+  T_SCORE="$(extract_score "$T_JUDGE")"
+  C_SCORE="$(extract_score "$C_JUDGE")"
+  F_SCORE="$(extract_score "$F_JUDGE")"
+
+  S_REASON="$(extract_reason "$S_JUDGE")"
+  T_REASON="$(extract_reason "$T_JUDGE")"
+  C_REASON="$(extract_reason "$C_JUDGE")"
+  F_REASON="$(extract_reason "$F_JUDGE")"
+
+  S_SPEED="$(speed_score "$SIMPLE_MS")"
+  T_SPEED="$(speed_score "$STD_MS")"
+  C_SPEED="$(speed_score "$CPX_MS")"
+
+  # 카테고리별 종합 점수 (품질 + 속도 가중 합산)
+  S_TOTAL=$(python3 -c "print(round($S_SCORE*0.6+$S_SPEED*0.4,1))")
+  T_TOTAL=$(python3 -c "print(round($T_SCORE*0.7+$T_SPEED*0.3,1))")
+  C_TOTAL=$(python3 -c "print(round($C_SCORE*0.85+$C_SPEED*0.15,1))")
+
+  RECO="$(recommend_category "$S_TOTAL" "$T_TOTAL" "$C_TOTAL")"
+
+  echo ""
+  echo "┌─────────────────────────────────────────────────────┐"
+  printf "│  모델: %-44s │\n" "$model"
+  echo "├──────────┬─────────┬───────────┬─────────────────────┤"
+  echo "│ 카테고리 │  품질   │   속도    │   판정 이유         │"
+  echo "├──────────┼─────────┼───────────┼─────────────────────┤"
+  printf "│ %-8s │  %2s/10  │ %5sms   │ %-19s │\n" "SIMPLE"   "$S_SCORE" "${SIMPLE_MS:-?}" "${S_REASON:0:19}"
+  printf "│ %-8s │  %2s/10  │ %5sms   │ %-19s │\n" "STANDARD" "$T_SCORE" "${STD_MS:-?}"    "${T_REASON:0:19}"
+  printf "│ %-8s │  %2s/10  │ %5sms   │ %-19s │\n" "COMPLEX"  "$C_SCORE" "${CPX_MS:-?}"    "${C_REASON:0:19}"
+  printf "│ %-8s │  %2s/10  │ %-9s │ %-19s │\n"    "FORMAT"   "$F_SCORE" "(지시 준수)"      "${F_REASON:0:19}"
+  echo "├──────────┴─────────┴───────────┴─────────────────────┤"
+  printf "│  종합: simple=%-4s  standard=%-4s  complex=%-4s      │\n" "$S_TOTAL" "$T_TOTAL" "$C_TOTAL"
+  echo "├─────────────────────────────────────────────────────────┤"
+  printf "│  🎯 추천 카테고리: %-34s │\n" "$RECO"
+  echo "└─────────────────────────────────────────────────────────┘"
+  echo ""
+
+  # JSON 저장
+  python3 - << PYEOF
+import json, pathlib
+result = {
+    "model": "$model",
+    "date": "$TODAY",
+    "scores": {
+        "simple":   {"quality": $S_SCORE, "speed_ms": ${SIMPLE_MS:-0}, "speed_score": $S_SPEED, "total": $S_TOTAL, "reason": "$S_REASON"},
+        "standard": {"quality": $T_SCORE, "speed_ms": ${STD_MS:-0},    "speed_score": $T_SPEED, "total": $T_TOTAL, "reason": "$T_REASON"},
+        "complex":  {"quality": $C_SCORE, "speed_ms": ${CPX_MS:-0},    "speed_score": $C_SPEED, "total": $C_TOTAL, "reason": "$C_REASON"},
+        "format":   {"quality": $F_SCORE, "total": $F_SCORE, "reason": "$F_REASON"},
+    },
+    "recommendation": "$RECO"
+}
+pathlib.Path("$result_file").write_text(json.dumps(result, indent=2, ensure_ascii=False))
+print("  결과 저장:", "$result_file")
+PYEOF
+}
+
+# ── 비교 모드 ────────────────────────────────────────────────────
+eval_compare() {
+  local models=("$@")
+  local all_results=()
+
+  for model in "${models[@]}"; do
+    eval_single "$model"
+    local safe="${model//\//_}"
+    all_results+=("$EVAL_DIR/${safe}_${TODAY}.json")
+  done
+
+  echo ""
+  echo "━━━ 비교 요약 ━━━"
+  echo ""
+  python3 - "${all_results[@]}" << 'PYEOF'
+import json, sys, pathlib
+
+files = sys.argv[1:]
+results = []
+for f in files:
+    try:
+        results.append(json.loads(pathlib.Path(f).read_text()))
+    except: pass
+
+if not results:
+    print("결과 없음")
+    sys.exit(0)
+
+print(f"{'모델':<35} {'SIMPLE':>8} {'STANDARD':>10} {'COMPLEX':>9} {'추천':>10}")
+print("-" * 76)
+for r in results:
+    s = r["scores"]
+    print(f"{r['model']:<35} {s['simple']['total']:>8} {s['standard']['total']:>10} {s['complex']['total']:>9} {r['recommendation']:>10}")
+
+# 카테고리별 최적 모델
+cats = ["simple", "standard", "complex"]
+print()
+print("카테고리별 최적 모델:")
+for cat in cats:
+    best = max(results, key=lambda r: r["scores"][cat]["total"])
+    print(f"  {cat:10}: {best['model']} ({best['scores'][cat]['total']}/10)")
+PYEOF
+}
+
+# ── 저장 결과 리포트 ─────────────────────────────────────────────
+eval_report() {
+  echo ""
+  echo "━━━ collar eval-model 결과 리포트 ━━━"
+  echo ""
+
+  local count=0
+  python3 - "$EVAL_DIR" << 'PYEOF'
+import json, pathlib, sys, os
+
+eval_dir = pathlib.Path(sys.argv[1])
+files = sorted(eval_dir.glob("*.json"), key=os.path.getmtime, reverse=True)
+
+if not files:
+    print("저장된 평가 결과 없음.")
+    print("실행: collar-eval-model <model-id>")
+    sys.exit(0)
+
+print(f"총 {len(files)}개 평가 결과 (최신순)\n")
+print(f"{'날짜':<12} {'모델':<35} {'simple':>7} {'standard':>9} {'complex':>8} {'추천':>10}")
+print("-" * 85)
+
+for f in files:
+    try:
+        r = json.loads(f.read_text())
+        s = r["scores"]
+        print(f"{r['date']:<12} {r['model']:<35} {s['simple']['total']:>7} {s['standard']['total']:>9} {s['complex']['total']:>8} {r['recommendation']:>10}")
+    except:
+        pass
+
+# 카테고리별 역대 최적
+print()
+print("카테고리별 역대 최적 모델:")
+results = []
+for f in files:
+    try: results.append(json.loads(f.read_text()))
+    except: pass
+
+if results:
+    for cat in ["simple", "standard", "complex"]:
+        best = max(results, key=lambda r: r["scores"][cat]["total"])
+        print(f"  {cat:10}: {best['model']} ({best['scores'][cat]['total']}/10) — {best['date']}")
+PYEOF
+}
+
+# ── 엔트리포인트 ────────────────────────────────────────────────
+case "${1:-}" in
+  --compare)
+    shift
+    [ $# -ge 2 ] || die "--compare는 최소 2개 모델 필요: collar-eval-model --compare <a> <b>"
+    eval_compare "$@"
+    ;;
+  --list|--report)
+    eval_report
+    ;;
+  --help|-h|"")
+    cat << 'EOF'
+collar-eval-model — LLM 모델 카테고리 적합도 평가
+
+사용법:
+  collar-eval-model <model-id>                  단일 모델 평가
+  collar-eval-model --compare <a> <b> [c...]    여러 모델 비교
+  collar-eval-model --report                     저장된 결과 요약
+
+평가 항목:
+  SIMPLE   — 오타/명백한 버그 수정 (품질 60% + 속도 40%)
+  STANDARD — 일반 버그 수정 (품질 70% + 속도 30%)
+  COMPLEX  — 아키텍처 설계 (품질 85% + 속도 15%)
+  FORMAT   — 지시 형식 준수
+
+카테고리 배치 기준:
+  simple   → 빠르고 저렴한 모델
+  standard → 신뢰도 균형 모델
+  complex  → 깊이 있는 분석 모델
+
+결과 저장: ~/.collar/eval-results/<model>_<date>.json
+
+예시:
+  collar-eval-model claude-haiku-4-5-20251001
+  collar-eval-model claude-sonnet-4-6
+  collar-eval-model --compare claude-haiku-4-5-20251001 claude-sonnet-4-6 claude-opus-4-7
+  collar-eval-model --report
+EOF
+    ;;
+  *)
+    eval_single "$1"
+    ;;
+esac

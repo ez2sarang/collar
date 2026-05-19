@@ -42,6 +42,18 @@ trap "rm -f $CONTEXT_FILE" EXIT
 
   # 기존 compact가 있으면 이전 요약도 포함
   if [ -f "$COMPACT_FILE" ]; then
+    # Hashline 검증
+    STORED_HASH=$(grep -o 'COLLAR_HASH: [a-f0-9]*' "$COMPACT_FILE" 2>/dev/null | awk '{print $2}')
+    if [ -n "$STORED_HASH" ]; then
+      CONTENT_WITHOUT_HASH=$(grep -v "COLLAR_HASH:" "$COMPACT_FILE")
+      ACTUAL_HASH=$(printf '%s' "$CONTENT_WITHOUT_HASH" | sha256sum 2>/dev/null | cut -c1-8 || printf '%s' "$CONTENT_WITHOUT_HASH" | md5sum | cut -c1-8)
+      if [ "$STORED_HASH" != "$ACTUAL_HASH" ]; then
+        echo "⚠️  [Hashline] session-compact.md 해시 불일치 — 외부 수정 감지"
+        echo "   저장 해시: $STORED_HASH / 실제: $ACTUAL_HASH"
+        echo "   이전 compact는 신뢰하기 어렵습니다. 새로 생성합니다."
+        echo ""
+      fi
+    fi
     echo "## 이전 session-compact.md"
     cat "$COMPACT_FILE"
     echo ""
@@ -125,7 +137,9 @@ if [ -f "$COMPACT_FILE" ]; then
   cp "$COMPACT_FILE" "$COMPACT_FILE.backup.$(date +%Y%m%d-%H%M%S)"
 fi
 
-echo "$LLM_OUTPUT" > "$COMPACT_FILE"
+# Hashline: 파일 무결성 해시 추가 (OMO Hashline 패턴)
+FILE_HASH=$(printf '%s' "$LLM_OUTPUT" | sha256sum 2>/dev/null | cut -c1-8 || printf '%s' "$LLM_OUTPUT" | md5sum | cut -c1-8)
+printf '%s\n<!-- COLLAR_HASH: %s DATE: %s -->\n' "$LLM_OUTPUT" "$FILE_HASH" "$TODAY" > "$COMPACT_FILE"
 echo "✅ 압축 저장: $COMPACT_FILE"
 
 # 크기 비교
