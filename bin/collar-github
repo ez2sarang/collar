@@ -227,6 +227,40 @@ def classify_issue(title, body, labels):
         return "feature"
     return "question"
 
+def assess_complexity(title, body):
+    """이슈 복잡도 평가: simple → haiku, standard → sonnet, complex → opus"""
+    text = (title + " " + body).lower()
+
+    complex_keywords = [
+        "architecture", "아키텍처", "refactor", "리팩터", "refactoring",
+        "design", "설계", "system", "시스템", "multiple files", "여러 파일",
+        "breaking change", "migration", "마이그레이션", "performance", "성능",
+        "security", "보안", "race condition", "concurrency", "동시성",
+        "database schema", "스키마", "api design", "api 설계",
+        "전체", "전반", "근본", "구조적"
+    ]
+    simple_keywords = [
+        "typo", "오타", "spelling", "minor", "simple", "간단", "quick",
+        "trivial", "small fix", "obvious", "명확", "one line",
+        "한 줄", "주석", "comment fix", "whitespace", "formatting"
+    ]
+
+    complex_score = sum(1 for w in complex_keywords if w in text)
+    simple_score = sum(1 for w in simple_keywords if w in text)
+    body_length = len(body)
+
+    if simple_score > 0 and complex_score == 0 and body_length < 200:
+        return "simple"
+    if complex_score >= 2 or body_length > 1500:
+        return "complex"
+    return "standard"
+
+COMPLEXITY_MODEL = {
+    "simple":   "claude-haiku-4-5-20251001",
+    "standard": "claude-sonnet-4-6",
+    "complex":  "claude-opus-4-7",
+}
+
 for issue in issues:
     num   = str(issue["number"])
     title = issue["title"]
@@ -261,9 +295,14 @@ for issue in issues:
         continue
 
     if kind == "bug" and auto_level >= 2:
-        # ── bug: claude --dangerously-skip-permissions → PR ────────
-        print(f"       → 버그 분석 시작 (claude --dangerously-skip-permissions)...")
-        run(f'gh issue comment {num} --repo {repo} --body "🤖 collar-github: 버그 자동 수정 중입니다. 잠시 후 PR을 생성합니다."')
+        # ── bug: 복잡도 평가 → 모델 선택 → PR ────────
+        complexity = assess_complexity(title, body)
+        fix_model = COMPLEXITY_MODEL[complexity]
+        max_turns = {"simple": "10", "standard": "20", "complex": "30"}[complexity]
+
+        print(f"       → 복잡도: {complexity} → 모델: {fix_model}")
+        print(f"       → 버그 분석 시작...")
+        run(f'gh issue comment {num} --repo {repo} --body "🤖 collar-github: 버그 자동 수정 중입니다 (복잡도: {complexity}). 잠시 후 PR을 생성합니다."')
 
         import glob as _glob2
 
@@ -299,8 +338,8 @@ for issue in issues:
                      "--output-format", "stream-json",
                      "--verbose",
                      "--dangerously-skip-permissions",
-                     "--model", "claude-sonnet-4-6",
-                     "--max-turns", "20"],
+                     "--model", fix_model,
+                     "--max-turns", max_turns],
                     input=fix_prompt,
                     capture_output=True, text=True, timeout=600,
                     cwd=project_dir
