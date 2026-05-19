@@ -273,18 +273,32 @@ call_judge() {
     local _tmp; _tmp="$(mktemp)"
     printf '%s' "$prompt" > "$_tmp"
     python3 - "$_tmp" "$api_key" "$JUDGE_MODEL" << 'PYEOF' 2>/dev/null
-import sys, json, urllib.request, urllib.error, pathlib
+import sys, json, urllib.request, urllib.error, pathlib, time
 prompt = pathlib.Path(sys.argv[1]).read_text()
 api_key, model = sys.argv[2], sys.argv[3]
 url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
 body = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
                    "generationConfig": {"temperature": 0}})
-try:
-    req = urllib.request.Request(url, body.encode(), {"Content-Type": "application/json"})
-    resp = json.loads(urllib.request.urlopen(req, timeout=30).read())
-    print(resp["candidates"][0]["content"]["parts"][0]["text"].strip())
-except Exception as e:
-    print('{"score": 5, "reason": "gemini judge error"}')
+for attempt in range(4):  # 최대 4회 재시도 (0, 2, 4, 8초 대기)
+    try:
+        if attempt > 0:
+            time.sleep(2 ** attempt)
+        req = urllib.request.Request(url, body.encode(), {"Content-Type": "application/json"})
+        resp = json.loads(urllib.request.urlopen(req, timeout=30).read())
+        if "candidates" in resp:
+            print(resp["candidates"][0]["content"]["parts"][0]["text"].strip())
+            sys.exit(0)
+        elif resp.get("error", {}).get("code") == 429:
+            continue  # rate limit → retry
+        else:
+            break
+    except urllib.error.HTTPError as e:
+        if e.code == 429 and attempt < 3:
+            continue
+        break
+    except Exception:
+        break
+print('{"score": 5, "reason": "gemini judge error"}')
 PYEOF
     rm -f "$_tmp"
   else
@@ -452,16 +466,20 @@ eval_single() {
   FMT_MS="$(split_ms "$FMT_RAW")"
 
   echo ""
+  # Gemini judge는 rate limit 방지를 위해 호출 사이에 딜레이
+  _JUDGE_DELAY=0
+  [ "$JUDGE_PROVIDER" = "gemini" ] && _JUDGE_DELAY=2
+
   log "🤖 judge ($JUDGE_MODEL) 정확성 채점 중..."
-  S_CJ="$(judge_correctness "simple"   "$SIMPLE_OUT")"
-  T_CJ="$(judge_correctness "standard" "$STD_OUT")"
-  C_CJ="$(judge_correctness "complex"  "$CPX_OUT")"
-  F_CJ="$(judge_correctness "format"   "$FMT_OUT")"
+  S_CJ="$(judge_correctness "simple"   "$SIMPLE_OUT")";   [ "$_JUDGE_DELAY" -gt 0 ] && sleep "$_JUDGE_DELAY"
+  T_CJ="$(judge_correctness "standard" "$STD_OUT")";      [ "$_JUDGE_DELAY" -gt 0 ] && sleep "$_JUDGE_DELAY"
+  C_CJ="$(judge_correctness "complex"  "$CPX_OUT")";      [ "$_JUDGE_DELAY" -gt 0 ] && sleep "$_JUDGE_DELAY"
+  F_CJ="$(judge_correctness "format"   "$FMT_OUT")";      [ "$_JUDGE_DELAY" -gt 0 ] && sleep "$_JUDGE_DELAY"
 
   log "🧠 judge ($JUDGE_MODEL) 사고력 채점 중..."
-  S_RJ="$(judge_reasoning "simple"   "$SIMPLE_OUT")"
-  T_RJ="$(judge_reasoning "standard" "$STD_OUT")"
-  C_RJ="$(judge_reasoning "complex"  "$CPX_OUT")"
+  S_RJ="$(judge_reasoning "simple"   "$SIMPLE_OUT")";     [ "$_JUDGE_DELAY" -gt 0 ] && sleep "$_JUDGE_DELAY"
+  T_RJ="$(judge_reasoning "standard" "$STD_OUT")";        [ "$_JUDGE_DELAY" -gt 0 ] && sleep "$_JUDGE_DELAY"
+  C_RJ="$(judge_reasoning "complex"  "$CPX_OUT")";        [ "$_JUDGE_DELAY" -gt 0 ] && sleep "$_JUDGE_DELAY"
   F_RJ="$(judge_reasoning "format"   "$FMT_OUT")"
 
   # 정확성 점수
