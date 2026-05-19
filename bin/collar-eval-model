@@ -26,7 +26,8 @@ set -euo pipefail
 
 COLLAR_HOME="${COLLAR_HOME:-$HOME/.collar}"
 EVAL_DIR="$COLLAR_HOME/eval-results"
-JUDGE_MODEL="claude-haiku-4-5-20251001"
+JUDGE_MODEL="gemini-2.5-flash-lite"
+JUDGE_PROVIDER="gemini"   # gemini | haiku — --judge 플래그로 변경 가능
 TODAY="$(date +%Y-%m-%d)"
 mkdir -p "$EVAL_DIR"
 
@@ -261,11 +262,41 @@ run_task() {
 split_output() { printf '%s' "$1" | grep -v '^__MS__'; }
 split_ms()     { printf '%s' "$1" | grep '^__MS__' | cut -c7-; }
 
+# ── Judge 호출 공통 함수 ─────────────────────────────────────────
+# JUDGE_PROVIDER=gemini → Gemini API 직접 호출
+# JUDGE_PROVIDER=haiku  → Claude CLI
+call_judge() {
+  local prompt="$1"
+  if [ "$JUDGE_PROVIDER" = "gemini" ]; then
+    local api_key="$GEMINI_API_KEY_VAL"
+    [ -n "$api_key" ] || { echo '{"score": 5, "reason": "gemini key missing"}'; return; }
+    local _tmp; _tmp="$(mktemp)"
+    printf '%s' "$prompt" > "$_tmp"
+    python3 - "$_tmp" "$api_key" "$JUDGE_MODEL" << 'PYEOF' 2>/dev/null
+import sys, json, urllib.request, urllib.error, pathlib
+prompt = pathlib.Path(sys.argv[1]).read_text()
+api_key, model = sys.argv[2], sys.argv[3]
+url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+body = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
+                   "generationConfig": {"temperature": 0}})
+try:
+    req = urllib.request.Request(url, body.encode(), {"Content-Type": "application/json"})
+    resp = json.loads(urllib.request.urlopen(req, timeout=30).read())
+    print(resp["candidates"][0]["content"]["parts"][0]["text"].strip())
+except Exception as e:
+    print('{"score": 5, "reason": "gemini judge error"}')
+PYEOF
+    rm -f "$_tmp"
+  else
+    [ -n "$CLAUDE_BIN" ] || { echo '{"score": 5, "reason": "judge unavailable"}'; return; }
+    "$CLAUDE_BIN" -p --model "$JUDGE_MODEL" "$prompt" 2>/dev/null \
+      || echo '{"score": 5, "reason": "judge unavailable"}'
+  fi
+}
+
 # ── Judge: 정확성 채점 (Correctness) ────────────────────────────
-# "답이 맞는가" — 형식보다 내용 정확성 기준
 judge_correctness() {
   local task_type="$1" response="$2"
-  [ -n "$CLAUDE_BIN" ] || { echo '{"score": 5, "reason": "judge unavailable"}'; return; }
 
   local criteria
   case "$task_type" in
@@ -275,8 +306,7 @@ judge_correctness() {
     format)   criteria="Pure JSON only, all 3 keys with factually correct values (Paris, 12, 1991)." ;;
   esac
 
-  "$CLAUDE_BIN" -p --model "$JUDGE_MODEL" \
-"Judge the CORRECTNESS of this AI response. Focus on: did it actually solve the problem correctly?
+  call_judge "Judge the CORRECTNESS of this AI response. Focus on: did it actually solve the problem correctly?
 Task: $task_type
 Criteria: $criteria
 
@@ -285,15 +315,12 @@ Response (first 1000 chars):
 ${response:0:1000}
 ---
 
-Output ONLY JSON: {\"score\": <integer 0-10>, \"reason\": \"<max 10 words>\"}" 2>/dev/null \
-    || echo '{"score": 5, "reason": "judge unavailable"}'
+Output ONLY JSON: {\"score\": <integer 0-10>, \"reason\": \"<max 10 words>\"}"
 }
 
 # ── Judge: 사고력 채점 (Reasoning) ─────────────────────────────
-# "WHY를 설명하는가, 트레이드오프 고려, 엣지케이스 인식"
 judge_reasoning() {
   local task_type="$1" response="$2"
-  [ -n "$CLAUDE_BIN" ] || { echo '{"score": 5, "reason": "judge unavailable"}'; return; }
 
   local criteria
   case "$task_type" in
@@ -316,8 +343,7 @@ Score 0-10 based on depth of thinking shown."
       ;;
   esac
 
-  "$CLAUDE_BIN" -p --model "$JUDGE_MODEL" \
-"Judge the REASONING QUALITY of this AI response. Focus on: does it show deep understanding, not just a correct answer?
+  call_judge "Judge the REASONING QUALITY of this AI response. Focus on: does it show deep understanding, not just a correct answer?
 Task: $task_type
 Reasoning criteria: $criteria
 
@@ -326,8 +352,7 @@ Response (first 1200 chars):
 ${response:0:1200}
 ---
 
-Output ONLY JSON: {\"score\": <integer 0-10>, \"reason\": \"<max 12 words>\"}" 2>/dev/null \
-    || echo '{"score": 5, "reason": "judge unavailable"}'
+Output ONLY JSON: {\"score\": <integer 0-10>, \"reason\": \"<max 12 words>\"}"
 }
 
 _extract_json_field() {
@@ -665,6 +690,14 @@ POSITIONAL=()
 # 인수 파싱
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --judge)
+      case "${2:-}" in
+        gemini) JUDGE_PROVIDER="gemini"; JUDGE_MODEL="gemini-2.5-flash-lite" ;;
+        haiku)  JUDGE_PROVIDER="haiku";  JUDGE_MODEL="claude-haiku-4-5-20251001" ;;
+        *) die "--judge 옵션: gemini | haiku" ;;
+      esac
+      shift 2
+      ;;
     --provider)
       PROVIDER_OVERRIDE="$2"
       shift 2
