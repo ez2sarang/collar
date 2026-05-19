@@ -332,8 +332,60 @@ if results:
 PYEOF
 }
 
+# ── 평가 결과를 model-routing.json에 반영 ────────────────────────
+apply_routing() {
+  local result_file="$1"
+  local routing_file="$COLLAR_HOME/model-routing.json"
+
+  [ -f "$result_file" ] || die "결과 파일 없음: $result_file"
+
+  python3 - "$result_file" "$routing_file" << 'PYEOF'
+import json, pathlib, sys, datetime
+
+result_path = pathlib.Path(sys.argv[1])
+routing_path = pathlib.Path(sys.argv[2])
+
+result = json.loads(result_path.read_text())
+model = result["model"]
+scores = result["scores"]
+recommendation = result["recommendation"]
+
+# 기존 routing 로드 (없으면 기본값)
+if routing_path.exists():
+    routing = json.loads(routing_path.read_text())
+else:
+    routing = {"version": "1.0", "routing": {}, "providers": {}}
+
+# 추천 카테고리만 업데이트
+cat = recommendation
+routing.setdefault("routing", {})[cat] = {
+    "provider": "cerebras" if "csk-" in model else "anthropic",
+    "model": model,
+    "source": "eval",
+    "eval_score": scores[cat]["total"],
+    "updated": datetime.date.today().isoformat()
+}
+routing["updated"] = datetime.date.today().isoformat()
+
+routing_path.parent.mkdir(parents=True, exist_ok=True)
+routing_path.write_text(json.dumps(routing, indent=2, ensure_ascii=False))
+print(f"✅ model-routing.json 업데이트: {cat} → {model} (score: {scores[cat]['total']})")
+PYEOF
+}
+
 # ── 엔트리포인트 ────────────────────────────────────────────────
 case "${1:-}" in
+  --apply)
+    shift
+    [ $# -ge 1 ] || die "--apply <result.json> 또는 --apply --latest"
+    if [ "$1" = "--latest" ]; then
+      latest=$(ls -t "$EVAL_DIR"/*.json 2>/dev/null | head -1)
+      [ -n "$latest" ] || die "저장된 평가 결과 없음"
+      apply_routing "$latest"
+    else
+      apply_routing "$1"
+    fi
+    ;;
   --compare)
     shift
     [ $# -ge 2 ] || die "--compare는 최소 2개 모델 필요: collar-eval-model --compare <a> <b>"

@@ -105,7 +105,7 @@ CLAUDE_BIN="${CLAUDE_PATH:-/opt/homebrew/bin/claude}"
 
 if command -v claude >/dev/null 2>&1 || [ -x "$CLAUDE_BIN" ]; then
   echo "🤖 압축 중 (Claude)..."
-  LLM_OUTPUT="$("$CLAUDE_BIN" -p --model claude-haiku-4-5-20251001 "$PROMPT" 2>/dev/null)" && LLM_USED="claude-haiku" || true
+  LLM_OUTPUT="$(timeout 120 "$CLAUDE_BIN" -p --model claude-haiku-4-5-20251001 "$PROMPT" 2>/dev/null)" && LLM_USED="claude-haiku" || true
 fi
 
 if [ -z "$LLM_OUTPUT" ] && command -v gemini >/dev/null 2>&1; then
@@ -139,7 +139,7 @@ fi
 
 # Hashline: 파일 무결성 해시 추가 (OMO Hashline 패턴)
 FILE_HASH=$(printf '%s' "$LLM_OUTPUT" | sha256sum 2>/dev/null | cut -c1-8 || printf '%s' "$LLM_OUTPUT" | md5sum | cut -c1-8)
-printf '%s\n<!-- COLLAR_HASH: %s DATE: %s -->\n' "$LLM_OUTPUT" "$FILE_HASH" "$TODAY" > "$COMPACT_FILE"
+printf '<!-- COLLAR_HASH: %s DATE: %s -->\n%s\n' "$FILE_HASH" "$TODAY" "$LLM_OUTPUT" > "$COMPACT_FILE"
 echo "✅ 압축 저장: $COMPACT_FILE"
 
 # 크기 비교

@@ -181,6 +181,7 @@ cmd_run() {
 
   # 이슈별 처리 (issues를 임시 파일로 전달 — pipe+heredoc stdin 충돌 방지)
   ISSUES_TMP="$(mktemp /tmp/collar-github-issues.XXXXXX.json)"
+  chmod 600 "$ISSUES_TMP"
   echo "$ISSUES" > "$ISSUES_TMP"
   trap "rm -f $ISSUES_TMP" EXIT
 
@@ -255,11 +256,25 @@ def assess_complexity(title, body):
         return "complex"
     return "standard"
 
-COMPLEXITY_MODEL = {
-    "simple":   "claude-haiku-4-5-20251001",
-    "standard": "claude-sonnet-4-6",
-    "complex":  "claude-opus-4-7",
-}
+import pathlib
+
+def load_routing():
+    routing_file = pathlib.Path.home() / ".collar" / "model-routing.json"
+    fallback = {
+        "simple":   "claude-haiku-4-5-20251001",
+        "standard": "claude-sonnet-4-6",
+        "complex":  "claude-opus-4-7",
+    }
+    if not routing_file.exists():
+        return fallback
+    try:
+        d = json.loads(routing_file.read_text())
+        routing = d.get("routing", {})
+        return {cat: routing[cat]["model"] for cat in ["simple", "standard", "complex"] if cat in routing}
+    except Exception:
+        return fallback
+
+COMPLEXITY_MODEL = load_routing()
 
 for issue in issues:
     num   = str(issue["number"])
