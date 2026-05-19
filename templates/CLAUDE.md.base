@@ -1,8 +1,17 @@
 # CLAUDE.md — {{PROJECT_NAME}}
 
-## 프로젝트 개요
+> **언어 지시:** {{LANGUAGE_INSTRUCTION}}
 
-{{PROJECT_DESCRIPTION}}
+## 🎯 프로젝트 목표
+
+{{PROJECT_PURPOSE}}
+
+> AI는 매 세션 시작 시 이 목표를 읽고 작업 방향을 유지한다.
+> 목표를 변경할 때는 반드시 사용자 확인을 받아라.
+
+---
+
+## 프로젝트 개요
 
 스택: {{TECH_STACK}}
 

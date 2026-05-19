@@ -15,6 +15,30 @@ echo "🎯 collar-init: $PROJECT_NAME"
 echo "   대상: $TARGET"
 echo ""
 
+# ── 언어 선택 ─────────────────────────────────────────────────────
+echo "🌐 작업 안내 언어를 선택하세요:"
+echo "   1) 한국어 (Korean)  [기본값]"
+echo "   2) English"
+echo "   3) 日本語 (Japanese)"
+echo "   4) 中文 (Chinese)"
+read -r -p "선택 [1-4, Enter=한국어]: " _LANG_SEL
+case "${_LANG_SEL:-1}" in
+  2) COLLAR_LANG="en" ; LANG_LABEL="English" ;;
+  3) COLLAR_LANG="ja" ; LANG_LABEL="日本語" ;;
+  4) COLLAR_LANG="zh" ; LANG_LABEL="中文" ;;
+  *) COLLAR_LANG="ko" ; LANG_LABEL="한국어" ;;
+esac
+echo "   → $LANG_LABEL 선택됨"
+echo ""
+
+# ── 프로젝트 목표 입력 ───────────────────────────────────────────
+echo "🎯 프로젝트 목표를 한 줄로 입력하세요."
+echo "   (AI가 매 세션 시작 시 이것을 읽어 방향을 유지합니다)"
+echo "   예: 소규모 팀용 할일 관리 SaaS — 모바일 우선, 오프라인 지원"
+read -r -p "> " PROJECT_GOAL
+PROJECT_GOAL="${PROJECT_GOAL:-TODO: 이 프로젝트의 목표를 기록하세요.}"
+echo ""
+
 # ── 프로젝트 타입 감지 ──────────────────────────────────────────
 detect_type() {
   if [ -f "$TARGET/package.json" ]; then
@@ -136,16 +160,25 @@ render_template() {
   local out="$2"
   python3 - "$tmpl" "$out" \
     "$PROJECT_NAME" "$TECH_STACK" "$VERIFY_COMMAND" \
-    "$DEV_COMMAND_1" "$DEV_COMMAND_2" "$REPO_STRUCTURE" << 'PYEOF'
+    "$DEV_COMMAND_1" "$DEV_COMMAND_2" "$REPO_STRUCTURE" \
+    "$PROJECT_GOAL" "$COLLAR_LANG" << 'PYEOF'
 import sys, pathlib
 
 tmpl_path, out_path = sys.argv[1], sys.argv[2]
 proj, stack, verify, dev1, dev2, repo = sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6], sys.argv[7], sys.argv[8]
+goal, lang = sys.argv[9], sys.argv[10]
+
+lang_instruction = {
+    "ko": "모든 작업 안내, 설명, 보고는 **한국어**로 한다.",
+    "en": "All task guidance, explanations, and reports must be in **English**.",
+    "ja": "すべての作業案内・説明・報告は**日本語**で行う。",
+    "zh": "所有任务说明、解释和报告均使用**中文**。",
+}.get(lang, "모든 작업 안내, 설명, 보고는 **한국어**로 한다.")
 
 text = pathlib.Path(tmpl_path).read_text()
 text = text.replace("{{PROJECT_NAME}}", proj)
-text = text.replace("{{PROJECT_DESCRIPTION}}", "TODO: 이 프로젝트가 무엇인지 한 줄로 설명하라.")
-text = text.replace("{{PROJECT_PURPOSE}}", "TODO: 이 프로젝트의 목적을 설명하라.")
+text = text.replace("{{PROJECT_DESCRIPTION}}", goal)
+text = text.replace("{{PROJECT_PURPOSE}}", goal)
 text = text.replace("{{TECH_STACK}}", stack)
 text = text.replace("{{VERIFY_COMMAND}}", verify)
 text = text.replace("{{DEV_COMMAND_1}}", dev1)
@@ -154,6 +187,7 @@ text = text.replace("{{REPO_STRUCTURE}}", repo)
 text = text.replace("{{SETUP_COMMANDS}}", dev1)
 text = text.replace("{{DOMAIN_1}}", "도메인 1")
 text = text.replace("{{AGENT_1}}", "executor")
+text = text.replace("{{LANGUAGE_INSTRUCTION}}", lang_instruction)
 pathlib.Path(out_path).write_text(text)
 PYEOF
 }
@@ -213,7 +247,20 @@ if [ ! -f "$MEMORY_OUT" ]; then
 # Project Memory — $PROJECT_NAME
 마지막 업데이트: $(date +%Y-%m-%d)
 
-AI가 이 파일을 세션 시작 시 읽는다. 이전 세션에서 배운 것, 반복되는 패턴, 주의사항을 기록한다.
+AI가 이 파일을 세션 시작 시 **반드시** 읽는다. 목표를 잊지 않고 작업 방향을 유지하기 위해 항상 이 파일을 먼저 확인한다.
+
+---
+
+## 🎯 프로젝트 목표 (변경 시 사용자에게 확인 필요)
+
+$PROJECT_GOAL
+
+---
+
+## ⚙️ 설정
+
+- 언어: $LANG_LABEL ($COLLAR_LANG)
+- 초기화: $(date +%Y-%m-%d)
 
 ---
 
@@ -228,7 +275,22 @@ AI가 이 파일을 세션 시작 시 읽는다. 이전 세션에서 배운 것,
 (중요한 의사결정, 아키텍처 변경 이력을 간략히 기록)
 
 MEMORY_EOF
-  echo "✅ .collar/memory.md 생성 (프로젝트 메모리)"
+  echo "✅ .collar/memory.md 생성 (프로젝트 목표 + 메모리)"
+fi
+
+# ── .collar/config.json ──────────────────────────────────────────
+CONFIG_OUT="$TARGET/.collar/config.json"
+if [ ! -f "$CONFIG_OUT" ]; then
+  cat > "$CONFIG_OUT" << CONFIG_EOF
+{
+  "project": "$PROJECT_NAME",
+  "goal": "$PROJECT_GOAL",
+  "language": "$COLLAR_LANG",
+  "type": "$PROJECT_TYPE",
+  "created": "$(date +%Y-%m-%d)"
+}
+CONFIG_EOF
+  echo "✅ .collar/config.json 생성 (언어: $LANG_LABEL)"
 fi
 
 # ── .collar/hooks 설치 (collar-hooks 템플릿) ─────────────────────
