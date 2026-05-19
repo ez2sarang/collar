@@ -91,18 +91,96 @@ STARTED 상태에서 "완료"라고 말하는 것은 금지.
 진행할까요?
 ```
 
-## Playwright 사용 금지 (모든 프로젝트 공통)
+## 브라우저 자동화 — Patchright CDP 방식 (모든 프로젝트 공통)
 
-Playwright 및 브라우저 자동화 도구를 사용하지 않는다.
+### 금지: Playwright MCP 도구
 
-**금지 도구**: `browser_navigate`, `browser_screenshot`, `browser_click` 등 모든 Playwright MCP 도구
+`mcp__plugin_ecc_playwright__*` 계열 (`browser_navigate`, `browser_screenshot`, `browser_click` 등) **절대 사용 금지**.
 
-**UI 확인이 필요한 경우**: 코드 수정 후 사용자에게 직접 확인을 요청한다.
+**이유:** Chrome 확장("Playwright MCP Bridge") 설치 없이는 `ERR_BLOCKED_BY_CLIENT` 오류만 발생. CF 탐지에도 취약.
+
+### 허용: Patchright + CDP Python 스크립트
+
+브라우저 자동화가 필요하면 **Python + Patchright + CDP** 방식을 사용한다.
+
+```bash
+# 기존 Chrome에 CDP로 연결 (추천)
+uv run --with patchright python3 ~/.collar/bin/browser-test.py http://localhost:<PORT> /tmp/test.png --cdp=http://localhost:9222
+
+# 새 브라우저 실행
+uv run --with patchright python3 ~/.collar/bin/browser-test.py http://localhost:<PORT> /tmp/test.png
+
+# 모바일 뷰포트
+uv run --with patchright python3 ~/.collar/bin/browser-test.py http://localhost:<PORT> /tmp/test-mobile.png --mobile
 ```
-수정 완료. 브라우저에서 {URL} 직접 확인해주세요.
+
+스크린샷 확인: **Read 도구**로 `/tmp/test*.png` 직접 읽기 (gemini_vision 금지 — 느리고 부정확)
+
+### CDP 연결 기본 패턴
+
+```python
+from patchright.sync_api import sync_playwright
+
+with sync_playwright() as pw:
+    browser = pw.chromium.connect_over_cdp('http://localhost:9222')
+    context = browser.contexts[0] if browser.contexts else browser.new_context()
+    # URL 패턴으로 기존 탭 찾기
+    page = next((p for p in context.pages if 'target.com' in p.url), None)
+    if not page:
+        page = context.new_page()
 ```
 
-**절대 금지**: AI가 자율적으로 Playwright를 실행하는 것
+### Chrome CDP 모드로 시작
+
+```bash
+killall "Google Chrome" 2>/dev/null; sleep 1
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome \
+  --remote-debugging-port=9222 \
+  --user-data-dir=/tmp/chrome-cdp-profile \
+  --no-first-run &
+sleep 3
+```
+
+### Cloudflare 우회
+
+| 상황 | 방법 |
+|------|------|
+| 장기 스크래핑 | CDP 모드 (Chrome 열어두고 연결) |
+| cf_clearance 쿠키 있음 | Patchright + 쿠키 파일 주입 |
+| CF Turnstile 중간에 뜸 | iframe `input[type="checkbox"]` 자동 클릭 |
+| 자동 클릭 실패 | 사용자에게 브라우저에서 직접 체크 요청 |
+
+```python
+CF_BLOCK = ['Just a moment', 'Attention Required', '봇 검증', 'cf-browser-verification']
+if any(s in html for s in CF_BLOCK):
+    cf_frame = next((f for f in page.frames if 'challenges.cloudflare.com' in f.url), None)
+    if cf_frame:
+        for sel in ['input[type="checkbox"]', '.ctp-checkbox-label', 'label']:
+            try: cf_frame.click(sel, timeout=2000); break
+            except: pass
+```
+
+### 스크립트 위치 규칙
+
+| 용도 | 위치 |
+|------|------|
+| 범용 브라우저 도구 | `~/.collar/bin/` |
+| 프로젝트 전용 스크래퍼 | `<프로젝트>/scripts/` |
+| 1회성 디버그 | `/tmp/` (재부팅 시 삭제됨) |
+
+### 검증 체크리스트 (UI 변경 시)
+
+```
+[ ] 페이지 정상 로드 (500 에러 없음)
+[ ] 핵심 UI 요소 존재
+[ ] 콘솔 에러 없음
+[ ] 모바일 레이아웃 확인 (375px)
+STATUS: TESTED
+```
+
+**알려진 실패 패턴:**
+- Oracle Cloud / AWS 콘솔 SPA → CDP에서 `Loading...` 무한 → 직접 브라우저 URL 접근 후 스크린샷
+- `input()` 백그라운드 실행 → 즉시 종료 → 파일 기반 시그널로 대체
 
 ## 재발 버그 체크
 
