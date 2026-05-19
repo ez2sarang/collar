@@ -186,7 +186,7 @@ cmd_run() {
   trap "rm -f $ISSUES_TMP" EXIT
 
   python3 - "$REPO" "$AUTO_LEVEL" "$PROCESSED_LOG" "$PROCESSED_IDS" "$TARGET" "$COLLAR_HOME" "$ISSUES_TMP" << 'PYEOF'
-import sys, json, subprocess, pathlib, datetime, os
+import sys, json, subprocess, pathlib, datetime, os, time
 
 repo = sys.argv[1]
 auto_level = int(sys.argv[2])
@@ -198,6 +198,16 @@ issues_file = sys.argv[7]
 
 issues = json.loads(pathlib.Path(issues_file).read_text())
 processed = set(processed_str.split()) if processed_str else set()
+
+_usage_log = pathlib.Path(collar_home) / "usage.log"
+
+def log_usage(provider: str, model: str, task: str, ms: int, status: str):
+    ts = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    line = f"{ts}\tgithub\t{provider}\t{model}\t{task}\t{ms}\t{status}\n"
+    try:
+        _usage_log.open("a").write(line)
+    except Exception:
+        pass
 
 def run(cmd, **kw):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True, **kw)
@@ -348,6 +358,7 @@ for issue in issues:
             )
 
             try:
+                _t0 = time.time()
                 r = subprocess.run(
                     [claude_bin, "--print", "-",
                      "--output-format", "stream-json",
@@ -359,6 +370,7 @@ for issue in issues:
                     capture_output=True, text=True, timeout=600,
                     cwd=project_dir
                 )
+                log_usage("anthropic", fix_model, f"fix-{complexity}", int((time.time()-_t0)*1000), "ok" if r.returncode == 0 else "error")
 
                 # parse stream-json: find FIX_SUMMARY in assistant text or result
                 for line in r.stdout.splitlines():
@@ -424,6 +436,7 @@ for issue in issues:
                     f"No other text."
                 )
                 try:
+                    _t0_rev = time.time()
                     rev_r = subprocess.run(
                         [claude_bin, "--print", "-",
                          "--output-format", "stream-json",
@@ -435,6 +448,7 @@ for issue in issues:
                         capture_output=True, text=True, timeout=60,
                         cwd=project_dir
                     )
+                    log_usage("anthropic", "claude-haiku-4-5-20251001", "review", int((time.time()-_t0_rev)*1000), "ok" if rev_r.returncode == 0 else "error")
                     review_status = "APPROVED"
                     for line in rev_r.stdout.splitlines():
                         try:

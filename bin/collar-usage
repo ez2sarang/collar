@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# collar-usage — Claude Max / Gemini Pro 사용량 현황 요약
+#
+# 사용법:
+#   collar-usage              오늘 사용량
+#   collar-usage --week       최근 7일
+#   collar-usage --all        전체 이력
+#   collar-usage --tail [n]   최근 n건 (기본 20)
+#
+# 로그 위치: ~/.collar/usage.log
+# 로그 형식: timestamp\tsource\tprovider\tmodel\ttask\tms\tstatus
+
+set -euo pipefail
+
+COLLAR_HOME="${COLLAR_HOME:-$HOME/.collar}"
+USAGE_LOG="$COLLAR_HOME/usage.log"
+
+die()  { echo "❌ $*" >&2; exit 1; }
+
+# 로그 없으면 안내
+if [ ! -f "$USAGE_LOG" ] || [ ! -s "$USAGE_LOG" ]; then
+  echo "━━━ collar-usage: 기록 없음 ━━━"
+  echo ""
+  echo "collar-eval-model 실행 후 로그가 쌓입니다."
+  echo "collar-github 실행 시에도 자동 기록됩니다."
+  echo ""
+  echo "로그 위치: $USAGE_LOG"
+  exit 0
+fi
+
+# ── 날짜 필터 결정 ────────────────────────────────────────────────
+MODE="today"
+TAIL_N=20
+
+case "${1:-}" in
+  --week)   MODE="week" ;;
+  --all)    MODE="all"  ;;
+  --tail)   MODE="tail"; TAIL_N="${2:-20}" ;;
+  --help|-h)
+    cat << 'EOF'
+collar-usage — 구독 사용량 현황
+
+사용법:
+  collar-usage           오늘 사용량 요약
+  collar-usage --week    최근 7일 요약
+  collar-usage --all     전체 이력 요약
+  collar-usage --tail n  최근 n건 로그 (기본 20)
+
+구독 정책:
+  anthropic (Claude Max) — standard/complex 핵심
+  gemini    (Gemini Pro) — simple 메인 + Claude fallback
+  cerebras              — 테스트 전용 (프로덕션 금지)
+
+수동 사용량 확인:
+  Claude Max: claude.ai → Settings → Usage
+  Gemini Pro: aistudio.google.com → Usage
+EOF
+    exit 0
+    ;;
+esac
+
+# ── 로그 파싱 + 요약 ─────────────────────────────────────────────
+python3 - "$USAGE_LOG" "$MODE" "$TAIL_N" << 'PYEOF'
+import sys, datetime, collections
+from pathlib import Path
+
+log_path = Path(sys.argv[1])
+mode     = sys.argv[2]
+tail_n   = int(sys.argv[3])
+
+today = datetime.date.today()
+week_ago = today - datetime.timedelta(days=7)
+
+rows = []
+for line in log_path.read_text().splitlines():
+    parts = line.strip().split('\t')
+    if len(parts) < 7:
+        continue
+    ts_str, source, provider, model, task, ms_str, status = parts[:7]
+    try:
+        ts = datetime.datetime.fromisoformat(ts_str)
+        ms = int(ms_str)
+    except:
+        continue
+    rows.append({'ts': ts, 'source': source, 'provider': provider,
+                 'model': model, 'task': task, 'ms': ms, 'status': status})
+
+# 필터 적용
+if mode == "today":
+    rows = [r for r in rows if r['ts'].date() == today]
+    label = f"오늘 ({today})"
+elif mode == "week":
+    rows = [r for r in rows if r['ts'].date() >= week_ago]
+    label = f"최근 7일 ({week_ago} ~ {today})"
+elif mode == "tail":
+    rows = rows[-tail_n:]
+    label = f"최근 {tail_n}건"
+else:
+    label = "전체"
+
+if not rows:
+    print(f"━━━ collar-usage: {label} — 기록 없음 ━━━")
+    sys.exit(0)
+
+# ── tail 모드: 로그 그대로 출력 ─────────────────────────────────
+if mode == "tail":
+    print(f"━━━ collar-usage: {label} ━━━\n")
+    print(f"{'시각':<20} {'출처':<8} {'프로바이더':<12} {'모델':<35} {'태스크':<10} {'ms':>8} {'상태'}")
+    print("─" * 100)
+    for r in rows:
+        print(f"{r['ts'].strftime('%m-%d %H:%M:%S'):<20} {r['source']:<8} {r['provider']:<12} {r['model']:<35} {r['task']:<10} {r['ms']:>8} {r['status']}")
+    sys.exit(0)
+
+# ── 요약 모드 ────────────────────────────────────────────────────
+total = len(rows)
+ok    = sum(1 for r in rows if r['status'] == 'ok')
+err   = total - ok
+
+print(f"\n━━━ collar-usage: {label} ━━━\n")
+print(f"  총 호출: {total}건  (성공 {ok} / 오류 {err})\n")
+
+# 프로바이더별 분류
+by_prov = collections.defaultdict(list)
+for r in rows:
+    by_prov[r['provider']].append(r)
+
+SUBS = {
+    'anthropic': 'Claude Max',
+    'gemini':    'Gemini Pro',
+    'cerebras':  'Cerebras (TEST)',
+}
+
+print(f"  {'구독/프로바이더':<20} {'호출수':>6} {'평균응답':>10} {'오류':>6}")
+print("  " + "─" * 45)
+for prov in ['anthropic', 'gemini', 'cerebras']:
+    if prov not in by_prov:
+        continue
+    pr = by_prov[prov]
+    count = len(pr)
+    avg_ms = sum(r['ms'] for r in pr) // count if count else 0
+    errors = sum(1 for r in pr if r['status'] != 'ok')
+    sub = SUBS.get(prov, prov)
+    flag = " ⚠️" if prov == 'cerebras' else ""
+    print(f"  {sub+flag:<20} {count:>6} {avg_ms:>8}ms {errors:>6}")
+
+# 모델별 상세
+print()
+print(f"  {'모델':<38} {'프로바이더':<12} {'호출':>5} {'평균ms':>8}")
+print("  " + "─" * 68)
+by_model = collections.defaultdict(list)
+for r in rows:
+    by_model[(r['provider'], r['model'])].append(r)
+for (prov, model), rs in sorted(by_model.items(), key=lambda x: -len(x[1])):
+    avg = sum(r['ms'] for r in rs) // len(rs)
+    print(f"  {model:<38} {prov:<12} {len(rs):>5} {avg:>8}ms")
+
+# 태스크 유형별
+print()
+print(f"  {'태스크':<12} {'호출':>6}")
+print("  " + "─" * 20)
+by_task = collections.Counter(r['task'] for r in rows)
+for task, cnt in sorted(by_task.items(), key=lambda x: -x[1]):
+    print(f"  {task:<12} {cnt:>6}")
+
+# 구독 링크 안내
+print()
+print("  📊 공식 사용량 확인:")
+print("     Claude Max → claude.ai › Settings › Usage")
+print("     Gemini Pro → aistudio.google.com › Usage")
+print()
+PYEOF

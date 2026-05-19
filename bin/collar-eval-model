@@ -52,16 +52,37 @@ find_gemini() {
 }
 
 CLAUDE_BIN="$(find_claude)"
-GEMINI_BIN="$(find_gemini)"
+
+# Gemini API 키: ~/.codex/config.toml 또는 환경변수
+_gemini_api_key() {
+  if [ -n "${GEMINI_API_KEY:-}" ]; then
+    echo "$GEMINI_API_KEY"
+    return
+  fi
+  # ~/.codex/config.toml 에서 추출
+  local cfg="$HOME/.codex/config.toml"
+  if [ -f "$cfg" ]; then
+    grep 'GEMINI_API_KEY' "$cfg" | grep -o '"[A-Za-z0-9_-]*"' | tr -d '"' | head -1
+  fi
+}
+GEMINI_API_KEY_VAL="$(_gemini_api_key)"
+
+# Codex (OpenAI ChatGPT Pro) 바이너리
+find_codex() {
+  command -v codex 2>/dev/null && return
+  find "$HOME/.nvm" -path "*/bin/codex" 2>/dev/null | head -1 || true
+}
+CODEX_BIN="$(find_codex)"
 
 # ── 프로바이더 자동 감지 ─────────────────────────────────────────
 detect_provider() {
   local model="$1"
   case "$model" in
-    claude-*)                         echo "anthropic" ;;
-    gemini-*|gemini_*)                echo "gemini" ;;
-    llama*|qwen*|gpt-oss*|zai-*)     echo "cerebras" ;;
-    *)                                echo "anthropic" ;;  # 기본값
+    claude-*)                          echo "anthropic" ;;
+    gemini-*|gemini_*)                 echo "gemini" ;;
+    gpt-*|o1|o3|o4-*|o1-*)           echo "codex" ;;
+    llama*|qwen*|gpt-oss*|zai-*)      echo "cerebras" ;;
+    *)                                 echo "anthropic" ;;
   esac
 }
 
@@ -75,14 +96,56 @@ call_model() {
       "$CLAUDE_BIN" -p --model "$model" "$prompt" 2>/dev/null
       ;;
 
+    gemini)
+      # CLI 대신 Gemini API 직접 호출 (15배 빠름)
+      local api_key="${GEMINI_API_KEY_VAL:-}"
+      [ -n "$api_key" ] || die "GEMINI_API_KEY를 찾을 수 없습니다. ~/.codex/config.toml 또는 GEMINI_API_KEY 환경변수 확인."
+      local _tmp_prompt _tmp_req _tmp_out
+      _tmp_prompt=$(mktemp); _tmp_req=$(mktemp); _tmp_out=$(mktemp)
+      printf '%s' "$prompt" > "$_tmp_prompt"
+      python3 -c "
+import json, sys
+with open(sys.argv[1]) as f:
+    prompt = f.read()
+print(json.dumps({'contents': [{'parts': [{'text': prompt}]}], 'generationConfig': {'maxOutputTokens': 2048, 'temperature': 0}}))
+" "$_tmp_prompt" > "$_tmp_req" 2>/dev/null
+      curl -s -X POST \
+        "https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${api_key}" \
+        -H "Content-Type: application/json" \
+        -d "@$_tmp_req" \
+        -o "$_tmp_out" \
+        --max-time 60 2>/dev/null
+      python3 -c "
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    if 'candidates' in data:
+        print(data['candidates'][0]['content']['parts'][0]['text'], end='')
+    elif 'error' in data:
+        print('ERROR:', data['error'].get('message','unknown'), end='')
+    else:
+        print('ERROR: unexpected response', end='')
+except Exception as e:
+    print('ERROR:', e, end='')
+" "$_tmp_out"
+      rm -f "$_tmp_prompt" "$_tmp_req" "$_tmp_out"
+      ;;
+
+    codex)
+      # OpenAI ChatGPT Pro — codex exec (stdout만 순수 응답, stderr에 헤더)
+      [ -n "$CODEX_BIN" ] || die "codex CLI를 찾을 수 없습니다."
+      local _tmp_prompt
+      _tmp_prompt=$(mktemp)
+      printf '%s' "$prompt" > "$_tmp_prompt"
+      "$CODEX_BIN" exec -m "$model" < "$_tmp_prompt" 2>/dev/null || true
+      rm -f "$_tmp_prompt"
+      ;;
+
     cerebras)
       local api_key="${CEREBRAS_API_KEY:-}"
       [ -n "$api_key" ] || die "CEREBRAS_API_KEY 환경변수가 설정되지 않았습니다."
-      # 임시 파일로 프롬프트 전달 (특수문자 안전 처리)
       local _tmp_prompt _tmp_req _tmp_out
-      _tmp_prompt=$(mktemp)
-      _tmp_req=$(mktemp)
-      _tmp_out=$(mktemp)
+      _tmp_prompt=$(mktemp); _tmp_req=$(mktemp); _tmp_out=$(mktemp)
       printf '%s' "$prompt" > "$_tmp_prompt"
       python3 -c "
 import json, sys
@@ -113,13 +176,8 @@ except Exception as e:
       rm -f "$_tmp_prompt" "$_tmp_req" "$_tmp_out"
       ;;
 
-    gemini)
-      [ -n "$GEMINI_BIN" ] || die "gemini CLI를 찾을 수 없습니다."
-      "$GEMINI_BIN" -p "$prompt" -m "$model" 2>/dev/null
-      ;;
-
     *)
-      die "알 수 없는 프로바이더: $provider"
+      die "알 수 없는 프로바이더: $provider (지원: anthropic, gemini, codex, cerebras)"
       ;;
   esac
 }
@@ -159,15 +217,32 @@ Max 350 words. Be concrete and specific.'
 TASK_FORMAT='Output EXACTLY this JSON with correct values. No markdown, no explanation, no other text:
 {"capital_of_france": "?", "square_root_of_144": "?", "python_year_created": "?"}'
 
+# ── Usage 로그 기록 ──────────────────────────────────────────────
+log_usage() {
+  local provider="$1" model="$2" task="$3" ms="$4" status="$5"
+  local usage_log="$COLLAR_HOME/usage.log"
+  local ts
+  ts=$(date '+%Y-%m-%dT%H:%M:%S')
+  printf '%s\teval\t%s\t%s\t%s\t%d\t%s\n' \
+    "$ts" "$provider" "$model" "$task" "$ms" "$status" >> "$usage_log"
+}
+
 # ── 단일 모델 실행 (시간 측정 포함) ─────────────────────────────
 run_task() {
-  local provider="$1" model="$2" prompt="$3"
-  local t_start t_end ms output
+  local provider="$1" model="$2" prompt="$3" task_label="${4:-unknown}"
+  local t_start t_end ms output status
 
   t_start=$(python3 -c "import time; print(int(time.time()*1000))")
   output=$(call_model "$provider" "$model" "$prompt" || echo "ERROR: model invocation failed")
   t_end=$(python3 -c "import time; print(int(time.time()*1000))")
   ms=$((t_end - t_start))
+
+  if printf '%s' "$output" | grep -q '^ERROR:'; then
+    status="error"
+  else
+    status="ok"
+  fi
+  log_usage "$provider" "$model" "$task_label" "$ms" "$status"
 
   printf '%s\n__MS__%d\n' "$output" "$ms"
 }
@@ -245,22 +320,22 @@ eval_single() {
   echo ""
 
   log "1/4 SIMPLE 테스트 중..."
-  SIMPLE_RAW="$(run_task "$provider" "$model" "$TASK_SIMPLE")"
+  SIMPLE_RAW="$(run_task "$provider" "$model" "$TASK_SIMPLE" "simple")"
   SIMPLE_OUT="$(split_output "$SIMPLE_RAW")"
   SIMPLE_MS="$(split_ms "$SIMPLE_RAW")"
 
   log "2/4 STANDARD 테스트 중..."
-  STD_RAW="$(run_task "$provider" "$model" "$TASK_STANDARD")"
+  STD_RAW="$(run_task "$provider" "$model" "$TASK_STANDARD" "standard")"
   STD_OUT="$(split_output "$STD_RAW")"
   STD_MS="$(split_ms "$STD_RAW")"
 
   log "3/4 COMPLEX 테스트 중..."
-  CPX_RAW="$(run_task "$provider" "$model" "$TASK_COMPLEX")"
+  CPX_RAW="$(run_task "$provider" "$model" "$TASK_COMPLEX" "complex")"
   CPX_OUT="$(split_output "$CPX_RAW")"
   CPX_MS="$(split_ms "$CPX_RAW")"
 
   log "4/4 FORMAT 테스트 중..."
-  FMT_RAW="$(run_task "$provider" "$model" "$TASK_FORMAT")"
+  FMT_RAW="$(run_task "$provider" "$model" "$TASK_FORMAT" "format")"
   FMT_OUT="$(split_output "$FMT_RAW")"
   FMT_MS="$(split_ms "$FMT_RAW")"
 
@@ -507,10 +582,11 @@ collar-eval-model — LLM 모델 카테고리 적합도 평가 (멀티 프로바
   collar-eval-model --apply --latest                      최근 결과를 routing에 적용
 
 프로바이더 (자동 감지 또는 --provider로 명시):
-  anthropic  — Claude CLI  (claude-* 모델)
-  cerebras   — Cerebras API (llama*, qwen*, gpt-oss*, zai-*)
+  anthropic  — Claude CLI         (claude-* / Claude Max 구독)
+  gemini     — Gemini API 직접    (gemini-* / Gemini Pro 구독, ~/.codex/config.toml 키 사용)
+  codex      — OpenAI Codex CLI   (gpt-*, o3, o4-* / ChatGPT Pro 구독)
+  cerebras   — Cerebras API       (llama*, qwen*, gpt-oss* / TEST ONLY — 프로덕션 금지)
                환경변수: CEREBRAS_API_KEY
-  gemini     — Gemini CLI  (gemini-* 모델)
 
 평가 항목:
   SIMPLE   — 오타/명백한 버그 수정 (품질 60% + 속도 40%)
