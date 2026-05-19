@@ -39,6 +39,147 @@ read -r -p "> " PROJECT_GOAL
 PROJECT_GOAL="${PROJECT_GOAL:-TODO: 이 프로젝트의 목표를 기록하세요.}"
 echo ""
 
+# ── AI 프로바이더 설정 ───────────────────────────────────────────
+echo "🤖 사용 중인 AI 구독을 선택하세요 (해당되는 것 모두, 쉼표로 구분):"
+echo "   1) Claude Max     (Anthropic CLI — claude 명령어)"
+echo "   2) Gemini Pro     (Google Gemini API 직접 호출)"
+echo "   3) ChatGPT Pro    (OpenAI Codex CLI — codex 명령어)"
+echo "   4) Cerebras       (TEST ONLY — 프로덕션 사용 금지)"
+echo "   예: 1,2 또는 1,2,3"
+read -r -p "선택 [기본값: 1]: " _PROV_SEL
+_PROV_SEL="${_PROV_SEL:-1}"
+
+# 선택된 프로바이더 파싱
+HAS_ANTHROPIC=false; HAS_GEMINI=false; HAS_CODEX=false; HAS_CEREBRAS=false
+IFS=',' read -ra _PROVS <<< "$_PROV_SEL"
+for _p in "${_PROVS[@]}"; do
+  _p="${_p// /}"
+  case "$_p" in
+    1) HAS_ANTHROPIC=true ;;
+    2) HAS_GEMINI=true ;;
+    3) HAS_CODEX=true ;;
+    4) HAS_CEREBRAS=true ;;
+  esac
+done
+echo ""
+
+# Gemini API 키 설정
+GEMINI_API_KEY_VAL=""
+if $HAS_GEMINI; then
+  # 자동 감지: ~/.codex/config.toml
+  _AUTO_KEY=$(python3 -c "
+import pathlib, re, sys
+p = pathlib.Path.home() / '.codex/config.toml'
+if p.exists():
+    m = re.search(r'GEMINI_API_KEY\s*=\s*[\"\'](.*?)[\"\']', p.read_text())
+    print(m.group(1) if m else '')
+" 2>/dev/null)
+  if [ -n "$_AUTO_KEY" ]; then
+    echo "   ✅ Gemini API 키 자동 감지됨 (~/.codex/config.toml)"
+    GEMINI_API_KEY_VAL="$_AUTO_KEY"
+  else
+    echo "   Gemini API 키를 입력하세요 (aistudio.google.com에서 발급):"
+    read -r -p "   GEMINI_API_KEY> " GEMINI_API_KEY_VAL
+    if [ -n "$GEMINI_API_KEY_VAL" ]; then
+      echo "   export GEMINI_API_KEY='$GEMINI_API_KEY_VAL'" >> "$TARGET/.collar/.env"
+      echo "   ⚠️  .collar/.env에 저장됨 (git 추적 제외 확인 필요)"
+    fi
+  fi
+  echo ""
+fi
+
+# Cerebras API 키 설정
+CEREBRAS_API_KEY_VAL=""
+if $HAS_CEREBRAS; then
+  echo "   ⚠️  Cerebras는 TEST ONLY — 프로덕션 라우팅에 포함되지 않습니다."
+  if [ -n "${CEREBRAS_API_KEY:-}" ]; then
+    echo "   ✅ CEREBRAS_API_KEY 환경변수 감지됨"
+    CEREBRAS_API_KEY_VAL="${CEREBRAS_API_KEY}"
+  else
+    echo "   CEREBRAS_API_KEY를 입력하세요:"
+    read -r -p "   CEREBRAS_API_KEY> " CEREBRAS_API_KEY_VAL
+  fi
+  echo ""
+fi
+
+# 프로바이더 가용성 테스트
+echo "🔍 프로바이더 연결 확인 중..."
+PROVIDER_STATUS="{}"
+if $HAS_ANTHROPIC; then
+  if command -v claude &>/dev/null; then
+    echo "   ✅ Claude CLI 감지 ($(claude --version 2>/dev/null | head -1 || echo 'ok'))"
+    PROVIDER_STATUS=$(echo "$PROVIDER_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); d['anthropic']='ok'; print(json.dumps(d))")
+  else
+    echo "   ❌ Claude CLI 없음 — claude 명령어 설치 필요"
+    HAS_ANTHROPIC=false
+  fi
+fi
+if $HAS_GEMINI && [ -n "$GEMINI_API_KEY_VAL" ]; then
+  _TEST=$(curl -s --max-time 5 \
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=$GEMINI_API_KEY_VAL" \
+    -H "Content-Type: application/json" \
+    -d '{"contents":[{"parts":[{"text":"hi"}]}]}' 2>/dev/null | python3 -c "
+import sys,json
+try:
+    d=json.load(sys.stdin)
+    print('ok' if 'candidates' in d else 'error:'+d.get('error',{}).get('message','?')[:40])
+except: print('error:parse')
+")
+  if [[ "$_TEST" == "ok" ]]; then
+    echo "   ✅ Gemini API 연결 성공 (gemini-2.5-flash-lite)"
+    PROVIDER_STATUS=$(echo "$PROVIDER_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); d['gemini']='ok'; print(json.dumps(d))")
+  else
+    echo "   ⚠️  Gemini API 오류: $_TEST"
+  fi
+fi
+if $HAS_CODEX; then
+  if command -v codex &>/dev/null; then
+    echo "   ✅ Codex CLI 감지"
+    PROVIDER_STATUS=$(echo "$PROVIDER_STATUS" | python3 -c "import sys,json; d=json.load(sys.stdin); d['codex']='ok'; print(json.dumps(d))")
+  else
+    echo "   ❌ Codex CLI 없음"
+    HAS_CODEX=false
+  fi
+fi
+echo ""
+
+# 라우팅 설정 생성
+_SIMPLE_PROVIDER="anthropic"; _SIMPLE_MODEL="claude-haiku-4-5-20251001"
+_STANDARD_PROVIDER="anthropic"; _STANDARD_MODEL="claude-sonnet-4-6"
+_COMPLEX_PROVIDER="anthropic"; _COMPLEX_MODEL="claude-opus-4-7"
+
+# 최적 라우팅: Gemini 있으면 simple에 사용
+if $HAS_GEMINI && [ -n "$GEMINI_API_KEY_VAL" ] && [[ "$PROVIDER_STATUS" == *'"gemini":"ok"'* ]]; then
+  _SIMPLE_PROVIDER="gemini"; _SIMPLE_MODEL="gemini-2.5-flash-lite"
+fi
+# Claude 없으면 강등
+if ! $HAS_ANTHROPIC; then
+  if $HAS_CODEX; then
+    _STANDARD_PROVIDER="codex"; _STANDARD_MODEL="gpt-5.5"
+    _COMPLEX_PROVIDER="codex"; _COMPLEX_MODEL="gpt-5.5"
+  elif $HAS_GEMINI; then
+    _STANDARD_PROVIDER="gemini"; _STANDARD_MODEL="gemini-2.5-flash-lite"
+    _COMPLEX_PROVIDER="gemini"; _COMPLEX_MODEL="gemini-2.5-flash-lite"
+  fi
+fi
+
+echo "📋 라우팅 설정:"
+echo "   simple  → $_SIMPLE_PROVIDER / $_SIMPLE_MODEL"
+echo "   standard→ $_STANDARD_PROVIDER / $_STANDARD_MODEL"
+echo "   complex → $_COMPLEX_PROVIDER / $_COMPLEX_MODEL"
+echo ""
+
+# 프로바이더 목록 JSON
+_PROVIDERS_JSON=$(python3 -c "
+import json
+provs = {}
+has_a, has_g, has_c = $([ "$HAS_ANTHROPIC" = true ] && echo True || echo False), $([ "$HAS_GEMINI" = true ] && echo True || echo False), $([ "$HAS_CODEX" = true ] && echo True || echo False)
+if has_a: provs['anthropic'] = {'type':'claude-cli','subscription':'Claude Max'}
+if has_g: provs['gemini'] = {'type':'gemini-api','subscription':'Gemini Pro','api_key':'${GEMINI_API_KEY_VAL:0:8}...'}
+if has_c: provs['codex'] = {'type':'codex-cli','subscription':'ChatGPT Pro'}
+print(json.dumps(provs, ensure_ascii=False))
+")
+
 # ── 프로젝트 타입 감지 ──────────────────────────────────────────
 detect_type() {
   if [ -f "$TARGET/package.json" ]; then
@@ -281,16 +422,35 @@ fi
 # ── .collar/config.json ──────────────────────────────────────────
 CONFIG_OUT="$TARGET/.collar/config.json"
 if [ ! -f "$CONFIG_OUT" ]; then
-  cat > "$CONFIG_OUT" << CONFIG_EOF
-{
-  "project": "$PROJECT_NAME",
-  "goal": "$PROJECT_GOAL",
-  "language": "$COLLAR_LANG",
-  "type": "$PROJECT_TYPE",
-  "created": "$(date +%Y-%m-%d)"
+  python3 - "$CONFIG_OUT" \
+    "$PROJECT_NAME" "$PROJECT_GOAL" "$COLLAR_LANG" "$PROJECT_TYPE" \
+    "$_SIMPLE_PROVIDER" "$_SIMPLE_MODEL" \
+    "$_STANDARD_PROVIDER" "$_STANDARD_MODEL" \
+    "$_COMPLEX_PROVIDER" "$_COMPLEX_MODEL" << PYEOF
+import sys, json, datetime
+
+out = sys.argv[1]
+proj, goal, lang, ptype = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+s_prov, s_model = sys.argv[6], sys.argv[7]
+t_prov, t_model = sys.argv[8], sys.argv[9]
+c_prov, c_model = sys.argv[10], sys.argv[11]
+
+config = {
+  "project": proj,
+  "goal": goal,
+  "language": lang,
+  "type": ptype,
+  "created": datetime.date.today().isoformat(),
+  "routing": {
+    "simple":   {"provider": s_prov, "model": s_model},
+    "standard": {"provider": t_prov, "model": t_model},
+    "complex":  {"provider": c_prov, "model": c_model}
+  }
 }
-CONFIG_EOF
-  echo "✅ .collar/config.json 생성 (언어: $LANG_LABEL)"
+import pathlib
+pathlib.Path(out).write_text(json.dumps(config, ensure_ascii=False, indent=2))
+PYEOF
+  echo "✅ .collar/config.json 생성 (언어: $LANG_LABEL, 라우팅: $_SIMPLE_PROVIDER→$_STANDARD_PROVIDER→$_COMPLEX_PROVIDER)"
 fi
 
 # ── .collar/hooks 설치 (collar-hooks 템플릿) ─────────────────────
