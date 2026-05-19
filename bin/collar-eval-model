@@ -389,11 +389,8 @@ print(round(corr*wc + reas*wr + spd*ws, 1))
 recommend_category() {
   python3 -c "
 s_total=$1; t_total=$2; c_total=$3
-cats = {
-  'simple':   s_total * 1.3 - c_total * 0.2,
-  'standard': t_total * 1.0,
-  'complex':  c_total * 1.3 - s_total * 0.1,
-}
+# 단순 최고점 카테고리 추천 (보너스 없음)
+cats = {'simple': s_total, 'standard': t_total, 'complex': c_total}
 best = max(cats, key=cats.get)
 print(best)
 "
