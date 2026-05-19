@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
-# collar-eval-model — LLM 모델 카테고리 적합도 평가
+# collar-eval-model — LLM 모델 카테고리 적합도 평가 (멀티 프로바이더)
 #
 # 브랜드/버전 무관하게 모델 자체를 4개 차원으로 평가해
 # collar 카테고리 라우팅 (simple/standard/complex) 배치를 결정한다.
 #
 # 사용법:
-#   collar-eval-model <model-id>
-#   collar-eval-model --compare <model-a> <model-b> [model-c...]
+#   collar-eval-model [--provider <provider>] <model-id>
+#   collar-eval-model --compare [--provider <provider>] <model-a> <model-b> [model-c...]
 #   collar-eval-model --list
 #   collar-eval-model --report
+#   collar-eval-model --apply --latest
+#
+# 프로바이더 (auto-detect or explicit):
+#   anthropic  — Claude CLI (claude-*)
+#   cerebras   — OpenAI-compat API (llama*, qwen*, gpt-oss*, zai-*)
+#   gemini     — Gemini CLI (gemini-*)
 #
 # 예시:
 #   collar-eval-model claude-haiku-4-5-20251001
-#   collar-eval-model --compare claude-haiku-4-5-20251001 claude-sonnet-4-6
-#   collar-eval-model --report   # 저장된 결과 요약
+#   collar-eval-model --provider cerebras llama3.1-8b
+#   collar-eval-model --compare claude-sonnet-4-6 llama3.1-8b gemini-2.5-flash
+#   collar-eval-model --report
 
 set -euo pipefail
 
@@ -31,16 +38,93 @@ find_claude() {
   for p in /opt/homebrew/bin/claude /usr/local/bin/claude "$HOME/.local/bin/claude"; do
     [ -x "$p" ] && echo "$p" && return
   done
-  # nvm/fnm
   find "$HOME/.nvm" "$HOME/.local/share/fnm" -name "claude" -type f 2>/dev/null | head -1 || true
 }
 
+find_gemini() {
+  # PATH 우선 (nvm/fnm 설치 포함)
+  command -v gemini 2>/dev/null && return
+  for p in /opt/homebrew/bin/gemini /usr/local/bin/gemini "$HOME/.local/bin/gemini"; do
+    [ -x "$p" ] && echo "$p" && return
+  done
+  # nvm 설치 위치 탐색
+  find "$HOME/.nvm" -path "*/bin/gemini" -not -name "*.js" 2>/dev/null | head -1 || true
+}
+
 CLAUDE_BIN="$(find_claude)"
-[ -n "$CLAUDE_BIN" ] || die "claude CLI를 찾을 수 없습니다. Claude Code 설치 확인."
+GEMINI_BIN="$(find_gemini)"
+
+# ── 프로바이더 자동 감지 ─────────────────────────────────────────
+detect_provider() {
+  local model="$1"
+  case "$model" in
+    claude-*)                         echo "anthropic" ;;
+    gemini-*|gemini_*)                echo "gemini" ;;
+    llama*|qwen*|gpt-oss*|zai-*)     echo "cerebras" ;;
+    *)                                echo "anthropic" ;;  # 기본값
+  esac
+}
+
+# ── 프로바이더별 실행 ────────────────────────────────────────────
+call_model() {
+  local provider="$1" model="$2" prompt="$3"
+
+  case "$provider" in
+    anthropic)
+      [ -n "$CLAUDE_BIN" ] || die "claude CLI를 찾을 수 없습니다."
+      "$CLAUDE_BIN" -p --model "$model" "$prompt" 2>/dev/null
+      ;;
+
+    cerebras)
+      local api_key="${CEREBRAS_API_KEY:-}"
+      [ -n "$api_key" ] || die "CEREBRAS_API_KEY 환경변수가 설정되지 않았습니다."
+      # 임시 파일로 프롬프트 전달 (특수문자 안전 처리)
+      local _tmp_prompt _tmp_req _tmp_out
+      _tmp_prompt=$(mktemp)
+      _tmp_req=$(mktemp)
+      _tmp_out=$(mktemp)
+      printf '%s' "$prompt" > "$_tmp_prompt"
+      python3 -c "
+import json, sys
+model = sys.argv[1]
+with open(sys.argv[2]) as f:
+    prompt = f.read()
+print(json.dumps({'model': model, 'messages': [{'role': 'user', 'content': prompt}], 'max_tokens': 1024, 'temperature': 0}))
+" "$model" "$_tmp_prompt" > "$_tmp_req" 2>/dev/null
+      curl -s -X POST "https://api.cerebras.ai/v1/chat/completions" \
+        -H "Authorization: Bearer $api_key" \
+        -H "Content-Type: application/json" \
+        -d "@$_tmp_req" \
+        -o "$_tmp_out" \
+        --max-time 60 2>/dev/null
+      python3 -c "
+import json, sys
+try:
+    data = json.load(open(sys.argv[1]))
+    if 'choices' in data:
+        print(data['choices'][0]['message']['content'], end='')
+    elif 'error' in data:
+        print('ERROR:', data['error'].get('message', 'unknown'), end='')
+    else:
+        print('ERROR: unexpected response', end='')
+except Exception as e:
+    print('ERROR:', e, end='')
+" "$_tmp_out"
+      rm -f "$_tmp_prompt" "$_tmp_req" "$_tmp_out"
+      ;;
+
+    gemini)
+      [ -n "$GEMINI_BIN" ] || die "gemini CLI를 찾을 수 없습니다."
+      "$GEMINI_BIN" -p "$prompt" -m "$model" 2>/dev/null
+      ;;
+
+    *)
+      die "알 수 없는 프로바이더: $provider"
+      ;;
+  esac
+}
 
 # ── 테스트 태스크 ────────────────────────────────────────────────
-# 각 태스크는 실제 업무를 압축한 것으로, 브랜드 무관하게 모델 자체를 평가한다.
-
 TASK_SIMPLE='Fix the 3 typos in this Python function. Output ONLY the corrected code block, nothing else.
 
 ```python
@@ -75,26 +159,26 @@ Max 350 words. Be concrete and specific.'
 TASK_FORMAT='Output EXACTLY this JSON with correct values. No markdown, no explanation, no other text:
 {"capital_of_france": "?", "square_root_of_144": "?", "python_year_created": "?"}'
 
-# ── 단일 모델 실행 ──────────────────────────────────────────────
+# ── 단일 모델 실행 (시간 측정 포함) ─────────────────────────────
 run_task() {
-  local model="$1" prompt="$2"
+  local provider="$1" model="$2" prompt="$3"
   local t_start t_end ms output
 
   t_start=$(python3 -c "import time; print(int(time.time()*1000))")
-  output=$("$CLAUDE_BIN" -p --model "$model" "$prompt" 2>/dev/null || echo "ERROR: model invocation failed")
+  output=$(call_model "$provider" "$model" "$prompt" || echo "ERROR: model invocation failed")
   t_end=$(python3 -c "import time; print(int(time.time()*1000))")
   ms=$((t_end - t_start))
 
-  # 출력과 시간을 구분자로 합쳐서 반환
   printf '%s\n__MS__%d\n' "$output" "$ms"
 }
 
-split_output() { echo "$1" | grep -v '^__MS__'; }
-split_ms()     { echo "$1" | grep '^__MS__' | cut -c7-; }
+split_output() { printf '%s' "$1" | grep -v '^__MS__'; }
+split_ms()     { printf '%s' "$1" | grep '^__MS__' | cut -c7-; }
 
 # ── Judge 모델 채점 ──────────────────────────────────────────────
 judge_score() {
   local task_type="$1" response="$2" criteria="$3"
+  [ -n "$CLAUDE_BIN" ] || { echo '{"score": 5, "reason": "judge unavailable"}'; return; }
   "$CLAUDE_BIN" -p --model "$JUDGE_MODEL" \
 "You are a strict automated code review judge. Score this AI response.
 Task type: $task_type
@@ -109,16 +193,23 @@ Output ONLY valid JSON (no markdown): {\"score\": <integer 0-10>, \"reason\": \"
     || echo '{"score": 5, "reason": "judge unavailable"}'
 }
 
-extract_score()  { python3 -c "
-import json,re,sys
-m=re.search(r'\{[^}]+\}','$1',re.DOTALL)
-print(json.loads(m.group()).get('score',5) if m else 5)" 2>/dev/null || echo 5; }
-
-extract_reason() { python3 -c "
-import json,re,sys
+extract_score()  {
+  python3 -c "
+import json,re
 raw='''$1'''
 m=re.search(r'\{[^}]+\}',raw,re.DOTALL)
-print(json.loads(m.group()).get('reason','') if m else '')" 2>/dev/null || echo ""; }
+print(json.loads(m.group()).get('score',5) if m else 5)
+" 2>/dev/null || echo 5
+}
+
+extract_reason() {
+  python3 -c "
+import json,re
+raw='''$1'''
+m=re.search(r'\{[^}]+\}',raw,re.DOTALL)
+print(json.loads(m.group()).get('reason','') if m else '')
+" 2>/dev/null || echo ""
+}
 
 # ── 속도 점수 (ms → 0-10, 역비례) ───────────────────────────────
 # 2000ms=10점 / 8000ms=5점 / 20000ms=0점
@@ -133,11 +224,6 @@ print(score)" 2>/dev/null || echo 5
 recommend_category() {
   python3 -c "
 s_total=$1; t_total=$2; c_total=$3
-
-# 카테고리별 적합도: 가중 합산
-# simple: 품질 60% + 속도 40% → 빠른 게 핵심
-# standard: 균형
-# complex: 품질 85% + 속도 15% → 깊이가 핵심
 cats = {
   'simple':   s_total * 1.3 - c_total * 0.2,
   'standard': t_total * 1.0,
@@ -150,31 +236,31 @@ print(best)
 
 # ── 단일 모델 평가 ────────────────────────────────────────────────
 eval_single() {
-  local model="$1"
+  local provider="$1" model="$2"
   local safe_name="${model//\//_}"
   local result_file="$EVAL_DIR/${safe_name}_${TODAY}.json"
 
   echo ""
-  echo "━━━ collar eval-model: $model ━━━"
+  echo "━━━ collar eval-model: $model [$provider] ━━━"
   echo ""
 
   log "1/4 SIMPLE 테스트 중..."
-  SIMPLE_RAW="$(run_task "$model" "$TASK_SIMPLE")"
+  SIMPLE_RAW="$(run_task "$provider" "$model" "$TASK_SIMPLE")"
   SIMPLE_OUT="$(split_output "$SIMPLE_RAW")"
   SIMPLE_MS="$(split_ms "$SIMPLE_RAW")"
 
   log "2/4 STANDARD 테스트 중..."
-  STD_RAW="$(run_task "$model" "$TASK_STANDARD")"
+  STD_RAW="$(run_task "$provider" "$model" "$TASK_STANDARD")"
   STD_OUT="$(split_output "$STD_RAW")"
   STD_MS="$(split_ms "$STD_RAW")"
 
   log "3/4 COMPLEX 테스트 중..."
-  CPX_RAW="$(run_task "$model" "$TASK_COMPLEX")"
+  CPX_RAW="$(run_task "$provider" "$model" "$TASK_COMPLEX")"
   CPX_OUT="$(split_output "$CPX_RAW")"
   CPX_MS="$(split_ms "$CPX_RAW")"
 
   log "4/4 FORMAT 테스트 중..."
-  FMT_RAW="$(run_task "$model" "$TASK_FORMAT")"
+  FMT_RAW="$(run_task "$provider" "$model" "$TASK_FORMAT")"
   FMT_OUT="$(split_output "$FMT_RAW")"
   FMT_MS="$(split_ms "$FMT_RAW")"
 
@@ -200,7 +286,6 @@ eval_single() {
   T_SPEED="$(speed_score "$STD_MS")"
   C_SPEED="$(speed_score "$CPX_MS")"
 
-  # 카테고리별 종합 점수 (품질 + 속도 가중 합산)
   S_TOTAL=$(python3 -c "print(round($S_SCORE*0.6+$S_SPEED*0.4,1))")
   T_TOTAL=$(python3 -c "print(round($T_SCORE*0.7+$T_SPEED*0.3,1))")
   C_TOTAL=$(python3 -c "print(round($C_SCORE*0.85+$C_SPEED*0.15,1))")
@@ -208,20 +293,21 @@ eval_single() {
   RECO="$(recommend_category "$S_TOTAL" "$T_TOTAL" "$C_TOTAL")"
 
   echo ""
-  echo "┌─────────────────────────────────────────────────────┐"
-  printf "│  모델: %-44s │\n" "$model"
-  echo "├──────────┬─────────┬───────────┬─────────────────────┤"
-  echo "│ 카테고리 │  품질   │   속도    │   판정 이유         │"
-  echo "├──────────┼─────────┼───────────┼─────────────────────┤"
-  printf "│ %-8s │  %2s/10  │ %5sms   │ %-19s │\n" "SIMPLE"   "$S_SCORE" "${SIMPLE_MS:-?}" "${S_REASON:0:19}"
-  printf "│ %-8s │  %2s/10  │ %5sms   │ %-19s │\n" "STANDARD" "$T_SCORE" "${STD_MS:-?}"    "${T_REASON:0:19}"
-  printf "│ %-8s │  %2s/10  │ %5sms   │ %-19s │\n" "COMPLEX"  "$C_SCORE" "${CPX_MS:-?}"    "${C_REASON:0:19}"
-  printf "│ %-8s │  %2s/10  │ %-9s │ %-19s │\n"    "FORMAT"   "$F_SCORE" "(지시 준수)"      "${F_REASON:0:19}"
-  echo "├──────────┴─────────┴───────────┴─────────────────────┤"
-  printf "│  종합: simple=%-4s  standard=%-4s  complex=%-4s      │\n" "$S_TOTAL" "$T_TOTAL" "$C_TOTAL"
-  echo "├─────────────────────────────────────────────────────────┤"
-  printf "│  🎯 추천 카테고리: %-34s │\n" "$RECO"
-  echo "└─────────────────────────────────────────────────────────┘"
+  echo "┌─────────────────────────────────────────────────────────┐"
+  printf "│  모델: %-50s │\n" "$model"
+  printf "│  프로바이더: %-46s │\n" "$provider"
+  echo "├──────────┬─────────┬───────────┬─────────────────────────┤"
+  echo "│ 카테고리 │  품질   │   속도    │   판정 이유             │"
+  echo "├──────────┼─────────┼───────────┼─────────────────────────┤"
+  printf "│ %-8s │  %2s/10  │ %5sms   │ %-23s │\n" "SIMPLE"   "$S_SCORE" "${SIMPLE_MS:-?}" "${S_REASON:0:23}"
+  printf "│ %-8s │  %2s/10  │ %5sms   │ %-23s │\n" "STANDARD" "$T_SCORE" "${STD_MS:-?}"    "${T_REASON:0:23}"
+  printf "│ %-8s │  %2s/10  │ %5sms   │ %-23s │\n" "COMPLEX"  "$C_SCORE" "${CPX_MS:-?}"    "${C_REASON:0:23}"
+  printf "│ %-8s │  %2s/10  │ %-9s │ %-23s │\n"    "FORMAT"   "$F_SCORE" "(지시 준수)"      "${F_REASON:0:23}"
+  echo "├──────────┴─────────┴───────────┴─────────────────────────┤"
+  printf "│  종합: simple=%-4s  standard=%-4s  complex=%-4s          │\n" "$S_TOTAL" "$T_TOTAL" "$C_TOTAL"
+  echo "├─────────────────────────────────────────────────────────────┤"
+  printf "│  🎯 추천 카테고리: %-38s │\n" "$RECO"
+  echo "└─────────────────────────────────────────────────────────────┘"
   echo ""
 
   # JSON 저장
@@ -229,6 +315,7 @@ eval_single() {
 import json, pathlib
 result = {
     "model": "$model",
+    "provider": "$provider",
     "date": "$TODAY",
     "scores": {
         "simple":   {"quality": $S_SCORE, "speed_ms": ${SIMPLE_MS:-0}, "speed_score": $S_SPEED, "total": $S_TOTAL, "reason": "$S_REASON"},
@@ -245,11 +332,14 @@ PYEOF
 
 # ── 비교 모드 ────────────────────────────────────────────────────
 eval_compare() {
+  local provider_override="$1"
+  shift
   local models=("$@")
   local all_results=()
 
   for model in "${models[@]}"; do
-    eval_single "$model"
+    local p="${provider_override:-$(detect_provider "$model")}"
+    eval_single "$p" "$model"
     local safe="${model//\//_}"
     all_results+=("$EVAL_DIR/${safe}_${TODAY}.json")
   done
@@ -271,19 +361,20 @@ if not results:
     print("결과 없음")
     sys.exit(0)
 
-print(f"{'모델':<35} {'SIMPLE':>8} {'STANDARD':>10} {'COMPLEX':>9} {'추천':>10}")
-print("-" * 76)
+print(f"{'모델':<35} {'프로바이더':<12} {'SIMPLE':>8} {'STANDARD':>10} {'COMPLEX':>9} {'추천':>10}")
+print("-" * 88)
 for r in results:
     s = r["scores"]
-    print(f"{r['model']:<35} {s['simple']['total']:>8} {s['standard']['total']:>10} {s['complex']['total']:>9} {r['recommendation']:>10}")
+    prov = r.get("provider", "?")
+    print(f"{r['model']:<35} {prov:<12} {s['simple']['total']:>8} {s['standard']['total']:>10} {s['complex']['total']:>9} {r['recommendation']:>10}")
 
-# 카테고리별 최적 모델
-cats = ["simple", "standard", "complex"]
 print()
 print("카테고리별 최적 모델:")
+cats = ["simple", "standard", "complex"]
 for cat in cats:
     best = max(results, key=lambda r: r["scores"][cat]["total"])
-    print(f"  {cat:10}: {best['model']} ({best['scores'][cat]['total']}/10)")
+    prov = best.get("provider", "?")
+    print(f"  {cat:10}: {best['model']} [{prov}] ({best['scores'][cat]['total']}/10)")
 PYEOF
 }
 
@@ -293,7 +384,6 @@ eval_report() {
   echo "━━━ collar eval-model 결과 리포트 ━━━"
   echo ""
 
-  local count=0
   python3 - "$EVAL_DIR" << 'PYEOF'
 import json, pathlib, sys, os
 
@@ -306,29 +396,30 @@ if not files:
     sys.exit(0)
 
 print(f"총 {len(files)}개 평가 결과 (최신순)\n")
-print(f"{'날짜':<12} {'모델':<35} {'simple':>7} {'standard':>9} {'complex':>8} {'추천':>10}")
-print("-" * 85)
+print(f"{'날짜':<12} {'프로바이더':<12} {'모델':<35} {'simple':>7} {'standard':>9} {'complex':>8} {'추천':>10}")
+print("-" * 97)
 
 for f in files:
     try:
         r = json.loads(f.read_text())
         s = r["scores"]
-        print(f"{r['date']:<12} {r['model']:<35} {s['simple']['total']:>7} {s['standard']['total']:>9} {s['complex']['total']:>8} {r['recommendation']:>10}")
+        prov = r.get("provider", "?")
+        print(f"{r['date']:<12} {prov:<12} {r['model']:<35} {s['simple']['total']:>7} {s['standard']['total']:>9} {s['complex']['total']:>8} {r['recommendation']:>10}")
     except:
         pass
 
-# 카테고리별 역대 최적
-print()
-print("카테고리별 역대 최적 모델:")
 results = []
 for f in files:
     try: results.append(json.loads(f.read_text()))
     except: pass
 
 if results:
+    print()
+    print("카테고리별 역대 최적 모델:")
     for cat in ["simple", "standard", "complex"]:
         best = max(results, key=lambda r: r["scores"][cat]["total"])
-        print(f"  {cat:10}: {best['model']} ({best['scores'][cat]['total']}/10) — {best['date']}")
+        prov = best.get("provider", "?")
+        print(f"  {cat:10}: {best['model']} [{prov}] ({best['scores'][cat]['total']}/10) — {best['date']}")
 PYEOF
 }
 
@@ -347,19 +438,18 @@ routing_path = pathlib.Path(sys.argv[2])
 
 result = json.loads(result_path.read_text())
 model = result["model"]
+provider = result.get("provider", "anthropic")
 scores = result["scores"]
 recommendation = result["recommendation"]
 
-# 기존 routing 로드 (없으면 기본값)
 if routing_path.exists():
     routing = json.loads(routing_path.read_text())
 else:
     routing = {"version": "1.0", "routing": {}, "providers": {}}
 
-# 추천 카테고리만 업데이트
 cat = recommendation
 routing.setdefault("routing", {})[cat] = {
-    "provider": "cerebras" if "csk-" in model else "anthropic",
+    "provider": provider,
     "model": model,
     "source": "eval",
     "eval_score": scores[cat]["total"],
@@ -369,39 +459,58 @@ routing["updated"] = datetime.date.today().isoformat()
 
 routing_path.parent.mkdir(parents=True, exist_ok=True)
 routing_path.write_text(json.dumps(routing, indent=2, ensure_ascii=False))
-print(f"✅ model-routing.json 업데이트: {cat} → {model} (score: {scores[cat]['total']})")
+print(f"✅ model-routing.json 업데이트: {cat} → {model} [{provider}] (score: {scores[cat]['total']})")
 PYEOF
 }
 
 # ── 엔트리포인트 ────────────────────────────────────────────────
-case "${1:-}" in
-  --apply)
-    shift
-    [ $# -ge 1 ] || die "--apply <result.json> 또는 --apply --latest"
-    if [ "$1" = "--latest" ]; then
-      latest=$(ls -t "$EVAL_DIR"/*.json 2>/dev/null | head -1)
-      [ -n "$latest" ] || die "저장된 평가 결과 없음"
-      apply_routing "$latest"
-    else
-      apply_routing "$1"
-    fi
-    ;;
-  --compare)
-    shift
-    [ $# -ge 2 ] || die "--compare는 최소 2개 모델 필요: collar-eval-model --compare <a> <b>"
-    eval_compare "$@"
-    ;;
-  --list|--report)
-    eval_report
-    ;;
-  --help|-h|"")
-    cat << 'EOF'
-collar-eval-model — LLM 모델 카테고리 적합도 평가
+PROVIDER_OVERRIDE=""
+POSITIONAL=()
+
+# 인수 파싱
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --provider)
+      PROVIDER_OVERRIDE="$2"
+      shift 2
+      ;;
+    --apply)
+      shift
+      [ $# -ge 1 ] || die "--apply <result.json> 또는 --apply --latest"
+      if [ "$1" = "--latest" ]; then
+        latest=$(ls -t "$EVAL_DIR"/*.json 2>/dev/null | head -1)
+        [ -n "$latest" ] || die "저장된 평가 결과 없음"
+        apply_routing "$latest"
+      else
+        apply_routing "$1"
+      fi
+      exit 0
+      ;;
+    --compare)
+      shift
+      [ $# -ge 2 ] || die "--compare는 최소 2개 모델 필요"
+      eval_compare "$PROVIDER_OVERRIDE" "$@"
+      exit 0
+      ;;
+    --list|--report)
+      eval_report
+      exit 0
+      ;;
+    --help|-h)
+      cat << 'EOF'
+collar-eval-model — LLM 모델 카테고리 적합도 평가 (멀티 프로바이더)
 
 사용법:
-  collar-eval-model <model-id>                  단일 모델 평가
-  collar-eval-model --compare <a> <b> [c...]    여러 모델 비교
-  collar-eval-model --report                     저장된 결과 요약
+  collar-eval-model [--provider <prov>] <model-id>       단일 모델 평가
+  collar-eval-model --compare [--provider <prov>] <a> <b> [c...]  비교
+  collar-eval-model --report                              저장된 결과 요약
+  collar-eval-model --apply --latest                      최근 결과를 routing에 적용
+
+프로바이더 (자동 감지 또는 --provider로 명시):
+  anthropic  — Claude CLI  (claude-* 모델)
+  cerebras   — Cerebras API (llama*, qwen*, gpt-oss*, zai-*)
+               환경변수: CEREBRAS_API_KEY
+  gemini     — Gemini CLI  (gemini-* 모델)
 
 평가 항목:
   SIMPLE   — 오타/명백한 버그 수정 (품질 60% + 속도 40%)
@@ -409,21 +518,54 @@ collar-eval-model — LLM 모델 카테고리 적합도 평가
   COMPLEX  — 아키텍처 설계 (품질 85% + 속도 15%)
   FORMAT   — 지시 형식 준수
 
-카테고리 배치 기준:
-  simple   → 빠르고 저렴한 모델
-  standard → 신뢰도 균형 모델
-  complex  → 깊이 있는 분석 모델
-
 결과 저장: ~/.collar/eval-results/<model>_<date>.json
 
 예시:
   collar-eval-model claude-haiku-4-5-20251001
-  collar-eval-model claude-sonnet-4-6
-  collar-eval-model --compare claude-haiku-4-5-20251001 claude-sonnet-4-6 claude-opus-4-7
-  collar-eval-model --report
+  collar-eval-model --provider cerebras llama3.1-8b
+  collar-eval-model gemini-2.5-flash
+  collar-eval-model --compare claude-sonnet-4-6 llama3.1-8b gemini-2.5-flash
+  collar-eval-model --apply --latest
 EOF
-    ;;
-  *)
-    eval_single "$1"
-    ;;
-esac
+      exit 0
+      ;;
+    "")
+      cat << 'EOF'
+collar-eval-model — 사용법: collar-eval-model --help
+EOF
+      exit 0
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
+  esac
+done
+
+# 나머지 positional 처리
+if [ ${#POSITIONAL[@]} -eq 0 ]; then
+  cat << 'EOF'
+collar-eval-model — LLM 모델 카테고리 적합도 평가
+
+사용법:
+  collar-eval-model <model-id>
+  collar-eval-model --help
+
+예시:
+  collar-eval-model claude-haiku-4-5-20251001
+  collar-eval-model --provider cerebras llama3.1-8b
+  collar-eval-model gemini-2.5-flash
+EOF
+  exit 0
+fi
+
+MODEL="${POSITIONAL[0]}"
+PROVIDER="${PROVIDER_OVERRIDE:-$(detect_provider "$MODEL")}"
+
+# Cerebras 사용 시 API 키 확인
+if [ "$PROVIDER" = "cerebras" ] && [ -z "${CEREBRAS_API_KEY:-}" ]; then
+  die "Cerebras 모델 평가에는 CEREBRAS_API_KEY 환경변수가 필요합니다.
+  설정: export CEREBRAS_API_KEY=<your-key>"
+fi
+
+eval_single "$PROVIDER" "$MODEL"
