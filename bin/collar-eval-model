@@ -183,36 +183,47 @@ except Exception as e:
 }
 
 # ── 테스트 태스크 ────────────────────────────────────────────────
-TASK_SIMPLE='Fix the 3 typos in this Python function. Output ONLY the corrected code block, nothing else.
+# SIMPLE: 오타 수정 — 형식 위반 없이 정확히 고치는지
+# 오타: caculate→calculate, totall→total, resualt→result, prise→price (4개)
+TASK_SIMPLE='There are exactly 4 spelling mistakes in this Python function. Fix ONLY those typos — do not change logic, structure, or variable names beyond the typos. Output ONLY the corrected function (no explanation, no markdown fences, no extra text):
 
-```python
 def caculate_totall(items):
     resualt = 0
     for item in items:
         resualt += item.prise
-    return resualt
-```'
+    return resualt'
 
-TASK_STANDARD='Fix the bug in this JavaScript function. Output ONLY: (1) the fixed function, (2) a one-sentence comment starting with "Fix:".
+# STANDARD: 버그 수정 — 버그 이해 + 올바른 수정 + Fix: 설명
+TASK_STANDARD='This JavaScript function has a bug: it returns NaN when input is "", null, or undefined.
+
+Fix the bug correctly. Output ONLY two things:
+1. The corrected function
+2. One comment line starting exactly with "Fix:" explaining what you changed and why
 
 ```javascript
 function safeParseInt(input) {
     return parseInt(input);
 }
-// Bug: returns NaN for "", null, undefined — should return 0
 ```'
 
-TASK_COMPLEX='You are designing a caching layer for a user profile API.
-Constraints: ~50k req/min, data changes ~5 times/day per user, Redis available.
+# COMPLEX: 아키텍처 사고 평가 — 형식 자유, WHY 설명과 트레이드오프가 핵심
+TASK_COMPLEX='You are a backend engineer designing a Redis caching layer.
 
-Output a structured design covering exactly these 5 points (label each):
-1. Cache key strategy
-2. TTL policy
-3. Invalidation approach
-4. Concurrent write handling
-5. Failure fallback
+Context:
+- API: user profile read endpoint
+- Load: 50,000 req/min peak
+- Data staleness: users update profile ~5 times/day
+- Stack: PostgreSQL (source of truth) + Redis
 
-Max 350 words. Be concrete and specific.'
+Address these 5 concerns. Use any format. For each, explain your reasoning and trade-offs — not just what to do, but WHY:
+
+A. Cache key design
+B. TTL value and why that duration
+C. Cache invalidation when user data changes
+D. Race conditions on concurrent writes
+E. Fallback behavior when Redis is unavailable
+
+Show your thinking. There is no length limit.'
 
 TASK_FORMAT='Output EXACTLY this JSON with correct values. No markdown, no explanation, no other text:
 {"capital_of_france": "?", "square_root_of_144": "?", "python_year_created": "?"}'
@@ -250,39 +261,98 @@ run_task() {
 split_output() { printf '%s' "$1" | grep -v '^__MS__'; }
 split_ms()     { printf '%s' "$1" | grep '^__MS__' | cut -c7-; }
 
-# ── Judge 모델 채점 ──────────────────────────────────────────────
-judge_score() {
-  local task_type="$1" response="$2" criteria="$3"
+# ── Judge: 정확성 채점 (Correctness) ────────────────────────────
+# "답이 맞는가" — 형식보다 내용 정확성 기준
+judge_correctness() {
+  local task_type="$1" response="$2"
   [ -n "$CLAUDE_BIN" ] || { echo '{"score": 5, "reason": "judge unavailable"}'; return; }
+
+  local criteria
+  case "$task_type" in
+    simple)   criteria="All 4 typos fixed (caculate→calculate, totall→total, resualt→result, prise→price). Logic unchanged." ;;
+    standard) criteria="Bug correctly fixed: handles empty string, null, undefined — returns 0 not NaN. Fix: comment present." ;;
+    complex)  criteria="All 5 concerns addressed (key, TTL, invalidation, concurrency, fallback). Technically sound choices." ;;
+    format)   criteria="Pure JSON only, all 3 keys with factually correct values (Paris, 12, 1991)." ;;
+  esac
+
   "$CLAUDE_BIN" -p --model "$JUDGE_MODEL" \
-"You are a strict automated code review judge. Score this AI response.
-Task type: $task_type
-Scoring criteria: $criteria
+"Judge the CORRECTNESS of this AI response. Focus on: did it actually solve the problem correctly?
+Task: $task_type
+Criteria: $criteria
 
-Response:
+Response (first 1000 chars):
 ---
-${response:0:800}
+${response:0:1000}
 ---
 
-Output ONLY valid JSON (no markdown): {\"score\": <integer 0-10>, \"reason\": \"<max 8 words>\"}" 2>/dev/null \
+Output ONLY JSON: {\"score\": <integer 0-10>, \"reason\": \"<max 10 words>\"}" 2>/dev/null \
     || echo '{"score": 5, "reason": "judge unavailable"}'
 }
 
-extract_score()  {
-  python3 -c "
-import json,re
-raw='''$1'''
-m=re.search(r'\{[^}]+\}',raw,re.DOTALL)
-print(json.loads(m.group()).get('score',5) if m else 5)
-" 2>/dev/null || echo 5
+# ── Judge: 사고력 채점 (Reasoning) ─────────────────────────────
+# "WHY를 설명하는가, 트레이드오프 고려, 엣지케이스 인식"
+judge_reasoning() {
+  local task_type="$1" response="$2"
+  [ -n "$CLAUDE_BIN" ] || { echo '{"score": 5, "reason": "judge unavailable"}'; return; }
+
+  local criteria
+  case "$task_type" in
+    simple)
+      criteria="Did the model identify ALL 4 typos precisely and apply ONLY minimal correct changes (no over-engineering, no added logic)?"
+      ;;
+    standard)
+      criteria="Does the fix show understanding of WHY parseInt fails (no radix, coerces empty string to NaN)? Is the chosen solution robust (handles all edge cases: '', null, undefined, non-numeric)?"
+      ;;
+    complex)
+      criteria="Evaluate reasoning depth:
+(1) Does it explain WHY for each technical decision (not just what)?
+(2) Are trade-offs explicitly discussed (e.g., TTL too short = DB load, too long = stale data)?
+(3) Are failure modes addressed (Redis down, cache stampede, split-brain)?
+(4) Are the technical choices appropriate for 50k req/min scale?
+Score 0-10 based on depth of thinking shown."
+      ;;
+    format)
+      criteria="Did the model follow instructions precisely with zero deviation? Penalize any extra text, markdown, or wrong values."
+      ;;
+  esac
+
+  "$CLAUDE_BIN" -p --model "$JUDGE_MODEL" \
+"Judge the REASONING QUALITY of this AI response. Focus on: does it show deep understanding, not just a correct answer?
+Task: $task_type
+Reasoning criteria: $criteria
+
+Response (first 1200 chars):
+---
+${response:0:1200}
+---
+
+Output ONLY JSON: {\"score\": <integer 0-10>, \"reason\": \"<max 12 words>\"}" 2>/dev/null \
+    || echo '{"score": 5, "reason": "judge unavailable"}'
 }
 
+_extract_json_field() {
+  local raw="$1" field="$2" default="${3:-5}"
+  python3 -c "
+import json, re
+raw='''${raw//\'/\'\\\'\'}'''
+m = re.search(r'\{[^{}]+\}', raw, re.DOTALL)
+try:
+    print(json.loads(m.group()).get('${field}', ${default}) if m else ${default})
+except:
+    print(${default})
+" 2>/dev/null || echo "$default"
+}
+
+extract_score()  { _extract_json_field "$1" "score" 5; }
 extract_reason() {
   python3 -c "
-import json,re
+import json, re
 raw='''$1'''
-m=re.search(r'\{[^}]+\}',raw,re.DOTALL)
-print(json.loads(m.group()).get('reason','') if m else '')
+m = re.search(r'\{[^{}]+\}', raw, re.DOTALL)
+try:
+    print(json.loads(m.group()).get('reason', '') if m else '')
+except:
+    print('')
 " 2>/dev/null || echo ""
 }
 
@@ -293,6 +363,26 @@ speed_score() {
 ms=int('${1:-10000}')
 score=max(0,min(10,round(10-(ms-2000)/1800)))
 print(score)" 2>/dev/null || echo 5
+}
+
+# ── 3차원 가중 점수 계산 ─────────────────────────────────────────
+# simple:   correctness*0.50 + reasoning*0.10 + speed*0.40
+# standard: correctness*0.45 + reasoning*0.25 + speed*0.30
+# complex:  correctness*0.30 + reasoning*0.55 + speed*0.15
+# format:   correctness*1.00 (지시 준수 = correctness)
+weighted_score() {
+  local category="$1" corr="$2" reas="$3" spd="$4"
+  python3 -c "
+corr=$corr; reas=$reas; spd=$spd
+weights = {
+  'simple':   (0.50, 0.10, 0.40),
+  'standard': (0.45, 0.25, 0.30),
+  'complex':  (0.30, 0.55, 0.15),
+  'format':   (1.00, 0.00, 0.00),
+}
+wc, wr, ws = weights.get('$category', (0.50, 0.20, 0.30))
+print(round(corr*wc + reas*wr + spd*ws, 1))
+" 2>/dev/null || echo 5
 }
 
 # ── 카테고리 추천 로직 ──────────────────────────────────────────
@@ -309,7 +399,7 @@ print(best)
 "
 }
 
-# ── 단일 모델 평가 ────────────────────────────────────────────────
+# ── 단일 모델 평가 (3차원: correctness + reasoning + speed) ──────
 eval_single() {
   local provider="$1" model="$2"
   local safe_name="${model//\//_}"
@@ -340,49 +430,63 @@ eval_single() {
   FMT_MS="$(split_ms "$FMT_RAW")"
 
   echo ""
-  log "🤖 judge ($JUDGE_MODEL) 채점 중..."
+  log "🤖 judge ($JUDGE_MODEL) 정확성 채점 중..."
+  S_CJ="$(judge_correctness "simple"   "$SIMPLE_OUT")"
+  T_CJ="$(judge_correctness "standard" "$STD_OUT")"
+  C_CJ="$(judge_correctness "complex"  "$CPX_OUT")"
+  F_CJ="$(judge_correctness "format"   "$FMT_OUT")"
 
-  S_JUDGE="$(judge_score "simple"   "$SIMPLE_OUT" "All 3 typos fixed, nothing extra added, valid Python")"
-  T_JUDGE="$(judge_score "standard" "$STD_OUT"    "Correct NaN/empty fix, has Fix: comment, clean code")"
-  C_JUDGE="$(judge_score "complex"  "$CPX_OUT"    "All 5 labeled sections present, concrete details, under 350 words")"
-  F_JUDGE="$(judge_score "format"   "$FMT_OUT"    "Pure JSON only, all 3 keys, factually correct values")"
+  log "🧠 judge ($JUDGE_MODEL) 사고력 채점 중..."
+  S_RJ="$(judge_reasoning "simple"   "$SIMPLE_OUT")"
+  T_RJ="$(judge_reasoning "standard" "$STD_OUT")"
+  C_RJ="$(judge_reasoning "complex"  "$CPX_OUT")"
+  F_RJ="$(judge_reasoning "format"   "$FMT_OUT")"
 
-  S_SCORE="$(extract_score "$S_JUDGE")"
-  T_SCORE="$(extract_score "$T_JUDGE")"
-  C_SCORE="$(extract_score "$C_JUDGE")"
-  F_SCORE="$(extract_score "$F_JUDGE")"
+  # 정확성 점수
+  S_CORR="$(extract_score "$S_CJ")"; S_CORR_R="$(extract_reason "$S_CJ")"
+  T_CORR="$(extract_score "$T_CJ")"; T_CORR_R="$(extract_reason "$T_CJ")"
+  C_CORR="$(extract_score "$C_CJ")"; C_CORR_R="$(extract_reason "$C_CJ")"
+  F_CORR="$(extract_score "$F_CJ")"; F_CORR_R="$(extract_reason "$F_CJ")"
 
-  S_REASON="$(extract_reason "$S_JUDGE")"
-  T_REASON="$(extract_reason "$T_JUDGE")"
-  C_REASON="$(extract_reason "$C_JUDGE")"
-  F_REASON="$(extract_reason "$F_JUDGE")"
+  # 사고력 점수
+  S_REAS="$(extract_score "$S_RJ")"; S_REAS_R="$(extract_reason "$S_RJ")"
+  T_REAS="$(extract_score "$T_RJ")"; T_REAS_R="$(extract_reason "$T_RJ")"
+  C_REAS="$(extract_score "$C_RJ")"; C_REAS_R="$(extract_reason "$C_RJ")"
+  F_REAS="$(extract_score "$F_RJ")"
 
+  # 속도 점수
   S_SPEED="$(speed_score "$SIMPLE_MS")"
   T_SPEED="$(speed_score "$STD_MS")"
   C_SPEED="$(speed_score "$CPX_MS")"
 
-  S_TOTAL=$(python3 -c "print(round($S_SCORE*0.6+$S_SPEED*0.4,1))")
-  T_TOTAL=$(python3 -c "print(round($T_SCORE*0.7+$T_SPEED*0.3,1))")
-  C_TOTAL=$(python3 -c "print(round($C_SCORE*0.85+$C_SPEED*0.15,1))")
+  # 3차원 가중 합산 (simple/standard/complex 각각 다른 가중치)
+  S_TOTAL="$(weighted_score "simple"   "$S_CORR" "$S_REAS" "$S_SPEED")"
+  T_TOTAL="$(weighted_score "standard" "$T_CORR" "$T_REAS" "$T_SPEED")"
+  C_TOTAL="$(weighted_score "complex"  "$C_CORR" "$C_REAS" "$C_SPEED")"
 
   RECO="$(recommend_category "$S_TOTAL" "$T_TOTAL" "$C_TOTAL")"
 
   echo ""
-  echo "┌─────────────────────────────────────────────────────────┐"
-  printf "│  모델: %-50s │\n" "$model"
-  printf "│  프로바이더: %-46s │\n" "$provider"
-  echo "├──────────┬─────────┬───────────┬─────────────────────────┤"
-  echo "│ 카테고리 │  품질   │   속도    │   판정 이유             │"
-  echo "├──────────┼─────────┼───────────┼─────────────────────────┤"
-  printf "│ %-8s │  %2s/10  │ %5sms   │ %-23s │\n" "SIMPLE"   "$S_SCORE" "${SIMPLE_MS:-?}" "${S_REASON:0:23}"
-  printf "│ %-8s │  %2s/10  │ %5sms   │ %-23s │\n" "STANDARD" "$T_SCORE" "${STD_MS:-?}"    "${T_REASON:0:23}"
-  printf "│ %-8s │  %2s/10  │ %5sms   │ %-23s │\n" "COMPLEX"  "$C_SCORE" "${CPX_MS:-?}"    "${C_REASON:0:23}"
-  printf "│ %-8s │  %2s/10  │ %-9s │ %-23s │\n"    "FORMAT"   "$F_SCORE" "(지시 준수)"      "${F_REASON:0:23}"
-  echo "├──────────┴─────────┴───────────┴─────────────────────────┤"
-  printf "│  종합: simple=%-4s  standard=%-4s  complex=%-4s          │\n" "$S_TOTAL" "$T_TOTAL" "$C_TOTAL"
-  echo "├─────────────────────────────────────────────────────────────┤"
-  printf "│  🎯 추천 카테고리: %-38s │\n" "$RECO"
-  echo "└─────────────────────────────────────────────────────────────┘"
+  echo "┌──────────────────────────────────────────────────────────────────┐"
+  printf "│  모델: %-58s │\n" "$model"
+  printf "│  프로바이더: %-54s │\n" "$provider"
+  echo "├──────────┬──────────┬──────────┬────────┬─────────────────────────┤"
+  echo "│ 카테고리 │ 정확성↑  │ 사고력↑  │  속도  │ 종합  │ 사고 판정             │"
+  echo "├──────────┼──────────┼──────────┼────────┼───────┼───────────────────────┤"
+  printf "│ %-8s │  %2s/10   │  %2s/10   │%5sms │  %-4s │ %-21s │\n" \
+    "SIMPLE"   "$S_CORR" "$S_REAS" "${SIMPLE_MS:-?}" "$S_TOTAL" "${S_REAS_R:0:21}"
+  printf "│ %-8s │  %2s/10   │  %2s/10   │%5sms │  %-4s │ %-21s │\n" \
+    "STANDARD" "$T_CORR" "$T_REAS" "${STD_MS:-?}"    "$T_TOTAL" "${T_REAS_R:0:21}"
+  printf "│ %-8s │  %2s/10   │  %2s/10   │%5sms │  %-4s │ %-21s │\n" \
+    "COMPLEX"  "$C_CORR" "$C_REAS" "${CPX_MS:-?}"    "$C_TOTAL" "${C_REAS_R:0:21}"
+  printf "│ %-8s │  %2s/10   │ %-8s │%-6s  │  %-4s │ %-21s │\n" \
+    "FORMAT"   "$F_CORR" "(형식준수)" ""              "$F_CORR"  "${F_CORR_R:0:21}"
+  echo "├──────────┴──────────┴──────────┴────────┴───────┴───────────────────────┤"
+  echo "│  가중치: simple(정확50%+사고10%+속도40%)  standard(45%+25%+30%)         │"
+  echo "│          complex(정확30%+사고55%+속도15%)                                │"
+  echo "├──────────────────────────────────────────────────────────────────┤"
+  printf "│  🎯 추천 카테고리: %-46s │\n" "$RECO"
+  echo "└──────────────────────────────────────────────────────────────────┘"
   echo ""
 
   # JSON 저장
@@ -392,11 +496,30 @@ result = {
     "model": "$model",
     "provider": "$provider",
     "date": "$TODAY",
+    "eval_version": "v2-3dim",
     "scores": {
-        "simple":   {"quality": $S_SCORE, "speed_ms": ${SIMPLE_MS:-0}, "speed_score": $S_SPEED, "total": $S_TOTAL, "reason": "$S_REASON"},
-        "standard": {"quality": $T_SCORE, "speed_ms": ${STD_MS:-0},    "speed_score": $T_SPEED, "total": $T_TOTAL, "reason": "$T_REASON"},
-        "complex":  {"quality": $C_SCORE, "speed_ms": ${CPX_MS:-0},    "speed_score": $C_SPEED, "total": $C_TOTAL, "reason": "$C_REASON"},
-        "format":   {"quality": $F_SCORE, "total": $F_SCORE, "reason": "$F_REASON"},
+        "simple": {
+            "correctness": $S_CORR, "reasoning": $S_REAS,
+            "speed_ms": ${SIMPLE_MS:-0}, "speed_score": $S_SPEED,
+            "total": $S_TOTAL,
+            "correctness_reason": "$S_CORR_R", "reasoning_reason": "$S_REAS_R"
+        },
+        "standard": {
+            "correctness": $T_CORR, "reasoning": $T_REAS,
+            "speed_ms": ${STD_MS:-0}, "speed_score": $T_SPEED,
+            "total": $T_TOTAL,
+            "correctness_reason": "$T_CORR_R", "reasoning_reason": "$T_REAS_R"
+        },
+        "complex": {
+            "correctness": $C_CORR, "reasoning": $C_REAS,
+            "speed_ms": ${CPX_MS:-0}, "speed_score": $C_SPEED,
+            "total": $C_TOTAL,
+            "correctness_reason": "$C_CORR_R", "reasoning_reason": "$C_REAS_R"
+        },
+        "format": {
+            "correctness": $F_CORR, "total": $F_CORR,
+            "correctness_reason": "$F_CORR_R"
+        }
     },
     "recommendation": "$RECO"
 }
