@@ -268,39 +268,22 @@ split_ms()     { printf '%s' "$1" | grep '^__MS__' | cut -c7-; }
 call_judge() {
   local prompt="$1"
   if [ "$JUDGE_PROVIDER" = "gemini" ]; then
-    local api_key="$GEMINI_API_KEY_VAL"
-    [ -n "$api_key" ] || { echo '{"score": 5, "reason": "gemini key missing"}'; return; }
-    local _tmp; _tmp="$(mktemp)"
-    printf '%s' "$prompt" > "$_tmp"
-    python3 - "$_tmp" "$api_key" "$JUDGE_MODEL" << 'PYEOF' 2>/dev/null
-import sys, json, urllib.request, urllib.error, pathlib, time
-prompt = pathlib.Path(sys.argv[1]).read_text()
-api_key, model = sys.argv[2], sys.argv[3]
-url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-body = json.dumps({"contents": [{"parts": [{"text": prompt}]}],
-                   "generationConfig": {"temperature": 0}})
-for attempt in range(4):  # 최대 4회 재시도 (0, 2, 4, 8초 대기)
-    try:
-        if attempt > 0:
-            time.sleep(2 ** attempt)
-        req = urllib.request.Request(url, body.encode(), {"Content-Type": "application/json"})
-        resp = json.loads(urllib.request.urlopen(req, timeout=30).read())
-        if "candidates" in resp:
-            print(resp["candidates"][0]["content"]["parts"][0]["text"].strip())
-            sys.exit(0)
-        elif resp.get("error", {}).get("code") == 429:
-            continue  # rate limit → retry
-        else:
-            break
-    except urllib.error.HTTPError as e:
-        if e.code == 429 and attempt < 3:
-            continue
-        break
-    except Exception:
-        break
-print('{"score": 5, "reason": "gemini judge error"}')
-PYEOF
-    rm -f "$_tmp"
+    local _gemini_bin; _gemini_bin="$(command -v gemini 2>/dev/null || find "$HOME/.nvm/versions/node" -name gemini 2>/dev/null | head -1)"
+    [ -n "$_gemini_bin" ] || { echo '{"score": 5, "reason": "gemini cli not found"}'; return; }
+    # /tmp에서 --skip-trust + unique session-id로 실행 → CLAUDE.md 격리, 세션 충돌 방지
+    # 재시도 3회 (rate limit 대응, 지수 백오프)
+    local _attempt _delay _sid _out
+    for _attempt in 1 2 3; do
+      _sid="$(uuidgen 2>/dev/null || printf '%s-%s' "$$" "$RANDOM")"
+      _out="$(cd /tmp && "$_gemini_bin" --skip-trust --session-id "$_sid" -p "$prompt" 2>/dev/null)"
+      if [ -n "$_out" ]; then
+        printf '%s\n' "$_out"
+        return
+      fi
+      _delay=$(( _attempt * 8 ))
+      sleep "$_delay"
+    done
+    echo '{"score": 5, "reason": "gemini judge error"}'
   else
     [ -n "$CLAUDE_BIN" ] || { echo '{"score": 5, "reason": "judge unavailable"}'; return; }
     "$CLAUDE_BIN" -p --model "$JUDGE_MODEL" "$prompt" 2>/dev/null \
@@ -468,7 +451,7 @@ eval_single() {
   echo ""
   # Gemini judge는 rate limit 방지를 위해 호출 사이에 딜레이
   _JUDGE_DELAY=0
-  [ "$JUDGE_PROVIDER" = "gemini" ] && _JUDGE_DELAY=2
+  [ "$JUDGE_PROVIDER" = "gemini" ] && _JUDGE_DELAY=5
 
   log "🤖 judge ($JUDGE_MODEL) 정확성 채점 중..."
   S_CJ="$(judge_correctness "simple"   "$SIMPLE_OUT")";   [ "$_JUDGE_DELAY" -gt 0 ] && sleep "$_JUDGE_DELAY"
