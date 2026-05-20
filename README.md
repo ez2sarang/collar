@@ -423,6 +423,8 @@ gstack/OMC가 없는 환경에서도 core 기능(collar-init, collar-watchdog, c
   - collar-github:   Claude API 직접 호출 + gh CLI           ← 진행 중
   - collar-team:     Claude Code Agent Teams API 직접 활용  ← 계획
   - 글로벌 배포:    npm/brew 패키지로 완전 자동화            ← 진행 중
+  - Windows 지원:   collar-cli(npm) TypeScript 통합으로 크로스 플랫폼화  ← 계획
+                    (WSL에서는 현재도 전체 동작. 네이티브 지원은 Shell → TS 이전 필요)
 ```
 
 ---
