@@ -49,17 +49,29 @@ collar/
 │   └── settings.json      # Claude Code 권한/훅 설정
 ├── .collar/               # 세션 상태 저장소 (session-compact.md, memory.md)
 ├── bin/                   # 실행 스크립트
-│   ├── collar-init        # 프로젝트 하네스 세팅 스크립트
-│   ├── collar-watchdog    # 컨텍스트 임계값 감시 + 자동 compact
-│   ├── collar-compact     # 세션 컨텍스트 압축 → session-compact.md
-│   ├── collar-remember    # 세션 중 인사이트 기록 (LLM 자동 글로벌 판단)
-│   ├── collar-update      # CLAUDE.md TODO 항목 AI로 자동 채우기
-│   ├── collar-github      # GitHub 이슈 분석 + PR 자동 생성
-│   └── collar-global      # 글로벌 규칙/메모리 템플릿을 ~/.claude/CLAUDE.md와 프로젝트 메모리에 LLM 중복 제거 후 병합
+│   ├── collar-init           # 프로젝트 하네스 설치 (언어·프로바이더 자동 감지)
+│   ├── collar-interview      # 대화형 인터뷰 (Ouroboros 명확성 점수) → CLAUDE.md 생성
+│   ├── collar-watchdog       # 컨텍스트 임계값 감시 + 자동 compact
+│   ├── collar-compact        # 세션 컨텍스트 압축 → session-compact.md
+│   ├── collar-remember       # 세션 중 인사이트 기록 (LLM 자동 글로벌 판단)
+│   ├── collar-update         # CLAUDE.md TODO 항목 AI로 자동 채우기
+│   ├── collar-github         # GitHub 이슈 분석 + 복잡도 기반 모델 라우팅 + PR 자동 생성
+│   ├── collar-global         # 글로벌 규칙/메모리를 ~/.claude/CLAUDE.md에 LLM 중복 제거 후 병합
+│   ├── collar-eval-model     # 멀티 프로바이더 모델 평가 → simple/standard/complex 카테고리 배치
+│   ├── collar-usage          # Claude Max / Gemini Pro 구독 사용량 현황 요약
+│   └── collar-template-sync  # 글로벌 규칙-템플릿 갭 LLM 분석 + 자동 동기화
+├── package/               # npm 패키지 (collar-cli, TypeScript)
+│   ├── src/cli/               # CLI 명령어 (init, setup, global, doctor)
+│   ├── src/mcp/               # MCP 서버 + 상태/게이트/에이전트 도구
+│   ├── src/hooks/             # 키워드 트리거 시스템
+│   ├── skills/                # 스킬 정의 (ralph, ralplan, deep-interview)
+│   └── prompts/               # 역할 기반 에이전트 프롬프트
 ├── templates/             # 다른 프로젝트에 적용할 하네스 템플릿
 │   ├── CLAUDE.md.base         # 공통 헌법 (모든 프로젝트)
 │   ├── AGENTS.md.base         # 에이전트 가이드 템플릿
 │   ├── collar-dispatcher.sh   # 훅 디스패처
+│   ├── collar-hooks/          # 보안·모니터링 훅 모음 (10/20/30/50번)
+│   ├── global/                # 글로벌 규칙 + 메모리 템플릿
 │   ├── config.json            # 기본 설정 템플릿
 │   ├── github-check.sh        # GitHub 체크 훅
 │   └── session-monitor.sh     # 세션 모니터 훅
@@ -68,11 +80,8 @@ collar/
     ├── 2026-05-14-harness-system-plan.md
     ├── 2026-05-14-session-qa.md
     ├── 2026-05-14-memory-system-design.md
-    ├── 2026-05-14-frustration-analysis.md
-    ├── 2026-05-14-runtime-environment-analysis.md
-    ├── 2026-05-14-competitive-analysis.md
-    ├── 2026-05-14-interview-prep.md
-    └── 2026-05-14-glossary.md
+    ├── 2026-05-17-npm-package-design.md
+    └── 2026-05-20-eval-framework.md
 ```
 
 ---

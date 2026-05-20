@@ -12,6 +12,7 @@
 - 세션 중 발견한 패턴 → 자동으로 전역 규칙으로 승격 판단
 - GitHub 이슈가 열리면 → 자동 분류, 버그는 PR까지 자동 생성
 - 새 프로젝트 → `collar-init` 하나로 AI 하네스 10초 설치
+- 모델 성능 측정 → `collar-eval-model`로 작업 유형별 최적 모델 자동 배치
 
 ---
 
@@ -26,13 +27,47 @@ collar = Claude Code 위의 하네스 레이어
 │           방향 설정 + 결과 리뷰만                          │
 ├─────────────────────────────────────────────────────────┤
 │                      collar                              │
-│  ┌─────────────┐  ┌──────────────┐  ┌────────────────┐ │
-│  │ 세션 관리   │  │ 학습 기록    │  │ GitHub 자동화  │ │
-│  │ watchdog    │  │ remember     │  │ collar-github  │ │
-│  └─────────────┘  └──────────────┘  └────────────────┘ │
+│  ┌──────────────┐ ┌──────────────┐ ┌─────────────────┐  │
+│  │ 세션 관리    │ │ 학습 기록    │ │ GitHub 자동화   │  │
+│  │ watchdog     │ │ remember     │ │ collar-github   │  │
+│  └──────────────┘ └──────────────┘ └─────────────────┘  │
+│  ┌──────────────┐ ┌──────────────┐ ┌─────────────────┐  │
+│  │ 모델 평가    │ │ 글로벌 규칙  │ │ npm 패키지      │  │
+│  │ eval-model   │ │ collar-global│ │ collar-cli      │  │
+│  └──────────────┘ └──────────────┘ └─────────────────┘  │
 ├─────────────────────────────────────────────────────────┤
 │                   Claude Code (CLI)                      │
 └─────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 빠른 시작
+
+```bash
+# 1. 설치 (~/.collar/bin 에 배포)
+git clone https://github.com/ez2sarang/collar.git
+cd collar && bash setup.sh
+# → PATH 자동 등록 안내 (zsh/bash rc 파일에 한 줄 추가)
+
+# 2. 프로젝트 하네스 설치
+cd my-project
+collar-init
+
+# 3. 세션 자동 관리 활성화
+collar-watchdog
+
+# 4. GitHub 자동화 연결 (선택)
+collar-github setup
+collar-github watch   # 세션 시작마다 이슈 자동 체크
+```
+
+또는 npm 패키지로:
+
+```bash
+npm install -g collar-cli
+collar setup
+collar init
 ```
 
 ---
@@ -44,7 +79,7 @@ collar를 처음 도입하면 3단계를 거친다.
 ```
 1단계: 초기화 (~10초)
 ────────────────────────────────────────────
-$ collar-init                  # 하네스 설치
+$ collar-init                  # 하네스 설치 (언어·프로바이더 자동 감지)
 $ collar-watchdog              # 세션 자동 관리 등록
 $ collar-github setup          # GitHub 연동 (선택)
 
@@ -68,7 +103,6 @@ $ collar-interview --dry-run   # 구조 검증용 미리보기
   → 이후 모든 세션에서 AI가 이 맥락으로 시작한다.
 
 $ collar-update                # AI가 CLAUDE.md TODO 항목만 자동 채우기
-                               # (인터뷰 없이 빠르게 TODO만 처리할 때)
 
 3단계: 자동화 (이후 사용자 개입 없음)
 ────────────────────────────────────────────
@@ -77,6 +111,24 @@ $ collar-update                # AI가 CLAUDE.md TODO 항목만 자동 채우기
   GitHub 이슈 등록 → 분류 + 버그 PR 자동 생성
   새 세션 시작 → session-compact.md 로드 → 즉시 맥락 복원
 ```
+
+---
+
+## 도구 목록
+
+| 도구 | 역할 |
+|------|------|
+| `collar-init` | 프로젝트 하네스 설치 (CLAUDE.md + AGENTS.md + .claude/settings.json). 언어·프레임워크·AI 프로바이더 자동 감지 |
+| `collar-interview` | 대화형 인터뷰 (7문 + Ouroboros 명확성 점수 + follow-up) → 프로젝트 맞춤 CLAUDE.md 생성 (`--quick/--standard/--deep`) |
+| `collar-watchdog` | ctx% 모니터링 훅 설치 → 60% 초과 시 자동 compact |
+| `collar-compact` | 세션 컨텍스트 압축 → `.collar/session-compact.md` |
+| `collar-remember` | 발견한 패턴 기록 → LLM이 전역 승격 여부 자동 판단 |
+| `collar-update` | CLAUDE.md TODO 항목 AI 자동 채우기 |
+| `collar-github` | GitHub 이슈 자동 분류·처리·PR 생성. 이슈 복잡도 기반 모델 자동 라우팅 |
+| `collar-global` | 템플릿 규칙/메모리를 `~/.claude/CLAUDE.md`와 프로젝트 메모리에 LLM 중복 제거 후 병합 (`--force`로 일괄 배포) |
+| `collar-eval-model` | Claude/Gemini/Cerebras 모델을 3차원 평가 (정확성·사고력·속도) → simple/standard/complex 카테고리 자동 배치 |
+| `collar-usage` | Claude Max / Gemini Pro 구독 사용량 현황 요약 (날짜별·프로바이더별·모델별) |
+| `collar-template-sync` | 글로벌 규칙과 프로젝트 메모리의 갭을 LLM으로 분석 → 템플릿 자동 업데이트 |
 
 ---
 
@@ -133,102 +185,51 @@ collar는 두 가지 메커니즘으로 이를 해결한다.
 
 ---
 
-## 현재 기술 의존성 및 로드맵
+## 모델 평가 프레임워크 (collar-eval-model)
 
-**현재 (v1~v2):** collar는 일부 기능에서 외부 도구 위에서 동작한다.
-
-| 기능 | 현재 의존 | 이유 |
-|------|---------|------|
-| 세션 모니터링 | gstack, OMC | 훅 오케스트레이션, 스킬 시스템 |
-| 모델 라우팅 | OMC (oh-my-claudecode) | opus/sonnet/haiku 자동 선택 |
-| 에이전트 팀 | OMC `Team` | 병렬 에이전트 실행 |
-
-**향후 비전 (v3+):** 외부 도구 의존 없이 Claude Code 기본 기능만으로 독립 동작.
-
-```
-현재:  collar → gstack/OMC → Claude Code
-목표:  collar → Claude Code (직접)
-
-로드맵:
-  - collar-watchdog: Claude Code 기본 훅만으로 완전 자율화 ← 진행 중
-  - collar-github:   Claude API 직접 호출 + gh CLI           ← 진행 중
-  - collar-team:     Claude Code Agent Teams API 직접 활용  ← 계획
-  - 글로벌 설치:     npm/brew 패키지로 배포                  ← 계획
-```
-
-gstack/OMC가 없는 환경에서도 core 기능(collar-init, collar-watchdog, collar-github)은 이미 독립적으로 동작한다.
-
----
-
-## 빠른 시작
+작업 유형에 맞는 모델을 자동으로 찾는다.
 
 ```bash
-# 1. 설치 (~/.collar/bin 에 배포)
-git clone https://github.com/ez2sarang/collar.git
-cd collar && bash setup.sh
-# → PATH 자동 등록 안내 (zsh/bash rc 파일에 한 줄 추가)
+# 모델 평가
+collar-eval-model                    # 현재 기본 모델 평가
+collar-eval-model --compare          # Claude vs Gemini vs Cerebras 비교
+collar-eval-model --provider gemini  # 특정 프로바이더 지정
 
-# 2. 프로젝트 하네스 설치
-cd my-project
-collar-init
-
-# 3. 세션 자동 관리 활성화
-collar-watchdog
-
-# 4. GitHub 자동화 연결 (선택)
-collar-github setup
-collar-github watch   # 세션 시작마다 이슈 자동 체크
+# 결과 조회 및 적용
+collar-eval-model --report           # 저장된 평가 결과 조회
+collar-eval-model --apply --latest   # 최신 평가 결과로 라우팅 자동 적용
 ```
+
+평가 체계:
+
+| 카테고리 | 기준 | 판단 기준 |
+|---------|------|---------|
+| **simple** | 오타·1줄 수정 | 정확성 60% + 속도 40% |
+| **standard** | 일반 버그·기능 추가 | 정확성 70% + 속도 30% |
+| **complex** | 아키텍처·보안·마이그레이션 | 정확성 85% + 속도 15% |
+
+- Judge: Gemini Flash가 정확성·사고력 채점 (자가심사 편향 제거)
+- 결과 저장: `~/.collar/eval-results/`
+- 라우팅 적용: `~/.collar/model-routing.json`
 
 ---
 
-## 도구 목록
+## 보안 훅 (자동 차단)
 
-| 도구 | 역할 |
-|------|------|
-| `collar-init` | 프로젝트 하네스 설치 (CLAUDE.md + AGENTS.md + .claude/settings.json) |
-| `collar-interview` | 대화형 인터뷰 (7문 + Ouroboros 명확성 점수 + follow-up) → 프로젝트 맞춤 CLAUDE.md 생성 (`--quick/--standard/--deep`) |
-| `collar-watchdog` | ctx% 모니터링 훅 설치 → 60% 초과 시 자동 compact |
-| `collar-compact` | 세션 컨텍스트 압축 → `.collar/session-compact.md` |
-| `collar-remember` | 발견한 패턴 기록 → LLM이 전역 승격 여부 자동 판단 |
-| `collar-update` | CLAUDE.md TODO 항목 AI 자동 채우기 |
-| `collar-github` | GitHub 이슈 자동 분류·처리·PR 생성 |
-
----
-
-## 이중 훅 구조 (OMX 패턴)
-
-collar는 Claude Code 훅을 두 레이어로 분리한다.
+collar는 위험한 명령어를 hooks 레이어에서 자동 차단한다.
 
 ```
-Layer 1 (Native)    .claude/settings.json
-                    └─ UserPromptSubmit / SessionStart
-                           └─ collar-dispatcher.sh  ← thin router
+20-destructive-guard.sh (PreToolUse):
+  차단 대상: db reset, rm -rf, git reset --hard, DROP TABLE, format 등
+  → 사용자 승인 없이 자동 실행 불가
 
-Layer 2 (Collar)    .collar/hooks/
-                    ├─ session-monitor.sh   ctx% 감시 + 자동 compact
-                    └─ github-check.sh      세션 시작 시 GitHub 이슈 체크
+30-commit-guard.sh (PreToolUse):
+  차단 대상: git push --force, git push (미확인)
+  → push 전 확인 요구
+
+10-session-ctx.sh (UserPromptSubmit):
+  → ctx% 감시, 60% 초과 시 자동 compact 트리거
 ```
-
-새 기능 훅은 `.collar/hooks/`에 파일 하나만 추가하면 자동 등록.
-
----
-
-## 지원 프로젝트 타입
-
-`collar-init`이 자동 감지:
-
-| 타입 | 감지 조건 | 검증 명령 |
-|------|----------|----------|
-| Next.js | `package.json`에 `"next"` | `pnpm typecheck && pnpm build` |
-| React | `package.json`에 `"react"` | `pnpm typecheck && pnpm build` |
-| Node.js API | express / fastify / hono | `pnpm typecheck && pnpm build` |
-| Python | `pyproject.toml` / `requirements.txt` | `uv run pytest` |
-| Rust | `Cargo.toml` | `cargo test && cargo clippy` |
-| Go | `go.mod` | `go test ./... && go vet` |
-| **Bash/Shell** | `*.sh` 파일 / `bin/` shebang | `shellcheck bin/*` |
-| Java | `pom.xml` / `build.gradle` | — |
-| 기타 | — | TODO 직접 입력 |
 
 ---
 
@@ -247,7 +248,6 @@ collar-github run
 
 # 3. 세션 자동 실행 등록
 collar-github watch
-# → 이후 Claude Code 세션 시작마다 미처리 이슈 자동 확인
 ```
 
 처리 흐름:
@@ -256,8 +256,92 @@ collar-github watch
   bug      → 코드 분석 → 수정 → PR 자동 생성
   feature  → 로드맵 기록 (레벨3: PR까지)
   question → 자동 답변 댓글
+
+이슈 복잡도 자동 판단:
+  simple   → Haiku (max-turns: 10)
+  standard → Sonnet (max-turns: 20)
+  complex  → Opus (max-turns: 30)
+
 → .collar/github-processed.log 기록
 ```
+
+---
+
+## 이중 훅 구조
+
+collar는 Claude Code 훅을 두 레이어로 분리한다.
+
+```
+Layer 1 (Native)    .claude/settings.json
+                    └─ UserPromptSubmit / SessionStart / PreToolUse
+                           └─ collar-dispatcher.sh  ← thin router
+
+Layer 2 (Collar)    .collar/hooks/
+                    ├─ 10-session-ctx.sh    ctx% 감시 + 자동 compact
+                    ├─ 20-destructive-guard.sh  파괴적 명령어 차단
+                    ├─ 30-commit-guard.sh   push 전 확인
+                    ├─ 50-todo-enforcer.sh  TODO 강제 처리
+                    └─ github-check.sh      세션 시작 시 GitHub 이슈 체크
+```
+
+새 기능 훅은 `.collar/hooks/`에 파일 하나만 추가하면 자동 등록.
+
+---
+
+## npm 패키지 (collar-cli)
+
+TypeScript 기반 공식 npm 패키지.
+
+```bash
+npm install -g collar-cli
+collar setup    # 글로벌 설정 (MCP + hooks)
+collar init     # 프로젝트 초기화
+collar doctor   # 설치 상태 검증
+collar global --force  # 전체 프로젝트 일괄 배포
+```
+
+### MCP 서버
+
+```bash
+collar mcp-serve
+```
+
+| MCP 도구 | 기능 |
+|---------|------|
+| `collar_state_write` | 모드 상태 저장 |
+| `collar_state_read` | 모드 상태 조회 |
+| `collar_gate_check` | 완료 게이트 확인 |
+| `collar_spawn_agent` | 에이전트 프롬프트 준비 |
+
+### 스킬 시스템
+
+키워드 트리거로 활성화:
+
+| 키워드 | 스킬 | 기능 |
+|--------|------|------|
+| `$ralph` | ralph | 집중 실행 루프 (작업 완료까지 반복) |
+| `$ralplan` | ralplan | 다중 에이전트 합의 기반 계획 |
+| `$deep-interview` | deep-interview | 자기 성찰 + 패턴 학습 |
+
+---
+
+## 지원 프로젝트 타입
+
+`collar-init`이 자동 감지:
+
+| 타입 | 감지 조건 | 검증 명령 |
+|------|----------|----------|
+| Next.js | `package.json`에 `"next"` | `pnpm typecheck && pnpm build` |
+| React | `package.json`에 `"react"` | `pnpm typecheck && pnpm build` |
+| Node.js API | express / fastify / hono | `pnpm typecheck && pnpm build` |
+| Python | `pyproject.toml` / `requirements.txt` | `uv run pytest` |
+| Rust | `Cargo.toml` | `cargo test && cargo clippy` |
+| Go | `go.mod` | `go test ./... && go vet` |
+| Bash/Shell | `*.sh` 파일 / `bin/` shebang | `shellcheck bin/*` |
+| Swift | `Package.swift` / `.xcodeproj` | `swift build` |
+| Kotlin | `build.gradle.kts` | `./gradlew build` |
+| Java | `pom.xml` / `build.gradle` | — |
+| 기타 | — | TODO 직접 입력 |
 
 ---
 
@@ -265,23 +349,38 @@ collar-github watch
 
 ```
 collar/
-├── bin/
+├── bin/                   핵심 CLI 스크립트 (Shell)
 │   ├── collar-init        프로젝트 하네스 설치
 │   ├── collar-interview   대화형 인터뷰 → 맞춤 CLAUDE.md 생성
 │   ├── collar-watchdog    세션 모니터링 훅 설치
 │   ├── collar-compact     컨텍스트 압축
 │   ├── collar-remember    패턴 기록 + 전역 승격
 │   ├── collar-update      CLAUDE.md 자동 업데이트
-│   └── collar-github      GitHub 자동화 파이프라인
-├── templates/
+│   ├── collar-github      GitHub 자동화 파이프라인
+│   ├── collar-global      글로벌 규칙/메모리 일괄 배포
+│   ├── collar-eval-model  멀티 프로바이더 모델 평가
+│   ├── collar-usage       구독 사용량 모니터
+│   └── collar-template-sync  템플릿-규칙 갭 분석 + 자동 동기화
+├── package/               npm 패키지 (TypeScript)
+│   ├── src/cli/           CLI 명령어 (init, setup, global, doctor)
+│   ├── src/mcp/           MCP 서버 + 도구
+│   ├── src/hooks/         키워드 트리거
+│   ├── skills/            스킬 정의 (ralph, ralplan, deep-interview)
+│   └── prompts/           역할 기반 에이전트 프롬프트
+├── templates/             하네스 템플릿
 │   ├── CLAUDE.md.base         공통 헌법 템플릿
 │   ├── AGENTS.md.base         에이전트 가이드 템플릿
 │   ├── collar-dispatcher.sh   이중 훅 Layer 1 라우터
+│   ├── collar-hooks/          보안·모니터링 훅 모음
+│   ├── global/                글로벌 규칙 + 메모리 템플릿
 │   ├── session-monitor.sh     ctx% 감시 훅
-│   ├── github-check.sh        GitHub 체크 훅
 │   └── config.json            기본 설정 템플릿
 ├── doc/                   설계 문서
-├── CLAUDE.md              collar 자체 헌법
+│   ├── 2026-05-14-architecture-v2.md
+│   ├── 2026-05-14-harness-system-plan.md
+│   ├── 2026-05-17-npm-package-design.md
+│   └── 2026-05-20-eval-framework.md
+├── CLAUDE.md              collar 자체 헌법 (이 레포 개발 규칙)
 └── AGENTS.md              에이전트 가이드
 ```
 
@@ -295,7 +394,36 @@ collar/
 | 메모리 | SQLite + FTS5 (복잡) | 파일 기반 | 파일 기반 (단순) |
 | 프로젝트 셋업 | ❌ | ❌ | ✅ collar-init |
 | GitHub 자동화 | ❌ | ❌ | ✅ collar-github |
+| 모델 평가/라우팅 | ❌ | ❌ | ✅ collar-eval-model |
+| 보안 훅 | ❌ | ❌ | ✅ 파괴적 명령어 자동 차단 |
 | Claude Code 전용 | ❌ | ❌ (Codex 전용) | ✅ |
+
+---
+
+## 현재 기술 의존성 및 로드맵
+
+**현재 (v1~v2):**
+
+| 기능 | 현재 의존 | 이유 |
+|------|---------|------|
+| 세션 모니터링 | gstack, OMC | 훅 오케스트레이션, 스킬 시스템 |
+| 모델 라우팅 | OMC (oh-my-claudecode) | opus/sonnet/haiku 자동 선택 |
+| 에이전트 팀 | OMC `Team` | 병렬 에이전트 실행 |
+
+gstack/OMC가 없는 환경에서도 core 기능(collar-init, collar-watchdog, collar-github)은 독립적으로 동작한다.
+
+**향후 비전 (v3+):**
+
+```
+현재:  collar → gstack/OMC → Claude Code
+목표:  collar → Claude Code (직접)
+
+로드맵:
+  - collar-watchdog: Claude Code 기본 훅만으로 완전 자율화 ← 진행 중
+  - collar-github:   Claude API 직접 호출 + gh CLI           ← 진행 중
+  - collar-team:     Claude Code Agent Teams API 직접 활용  ← 계획
+  - 글로벌 배포:    npm/brew 패키지로 완전 자동화            ← 진행 중
+```
 
 ---
 
@@ -305,14 +433,7 @@ collar/
 - [Claude Code CLI](https://claude.ai/code)
 - Python 3 (훅 스크립트)
 - `gh` CLI (GitHub 자동화 사용 시): `brew install gh`
-
----
-
-## 문의
-
-도입 상담, 커스터마이징, 엔터프라이즈 연동 문의:
-
-**sales@com.dooray.com**
+- Node.js 18+ (npm 패키지 사용 시)
 
 ---
 

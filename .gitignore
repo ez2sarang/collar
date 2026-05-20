@@ -8,6 +8,7 @@
 .collar/github-processed.log
 .collar/github-debug-*.txt
 .collar/.compact-lock
+.collar/.transcript-baseline
 .collar/roadmap.md
 
 # .collar/hooks/ 는 templates/ 에서 복사됨 — 커밋 불필요
@@ -19,6 +20,7 @@
 
 # ── 프로젝트별 Claude 설정 (절대경로 포함됨) ──────────────────────
 .claude/settings.json
+.claude/worktrees/
 
 # ── 외부 도구 런타임 ──────────────────────────────────────────────
 .gstack/
@@ -29,6 +31,10 @@
 CLAUDE.md.backup.*
 install.sh
 
+# ── npm 패키지 빌드 결과물 ────────────────────────────────────────
+package/dist/
+package/node_modules/
+
 # ── 임시/OS 파일 ──────────────────────────────────────────────────
 .DS_Store
 *.html
@@ -36,6 +42,7 @@ install.sh
 *.tmp
 *.swp
 *.bak
+Pouring
 
 # ── 의존성 ────────────────────────────────────────────────────────
 node_modules/
