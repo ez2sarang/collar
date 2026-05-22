@@ -106,9 +106,10 @@ ez2claude 글로벌 라우팅을 따른다. 추가 규칙:
 
 ## 세션 시작 프로토콜
 
-1. `.collar/session-compact.md`가 있으면 **먼저** 읽어라 (압축된 핵심 컨텍스트)
-2. `.collar/memory.md`에서 최근 패턴 확인
-3. session-compact.md가 없으면 memory.md 전체를 읽어라
+1. `.collar/project-facts.md` — **항상** 읽어라 (포트, DB, 스택, 명령어)
+2. `.collar/session-compact.md`가 있으면 읽어라 (압축된 핵심 컨텍스트)
+3. `.collar/memory.md`에서 최근 패턴 확인
+4. session-compact.md가 없으면 memory.md 전체를 읽어라
 
 ## 세션 종료 프로토콜
 

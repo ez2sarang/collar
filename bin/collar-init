@@ -390,6 +390,210 @@ EOF
   echo "✅ .npmrc 생성 (min-release-age=3, ignore-scripts=true)"
 fi
 
+# ── .collar/project-facts.md (환경 정보 — 세션마다 AI가 읽음) ───────
+FACTS_OUT="$TARGET/.collar/project-facts.md"
+mkdir -p "$TARGET/.collar"
+
+if [ ! -f "$FACTS_OUT" ]; then
+  set +e  # 감지 중 grep no-match 등이 set -e를 트리거하지 않도록
+  _FACTS_DATE=$(date +%Y-%m-%d)
+
+  # ── 포트 감지 ──────────────────────────────────────────────────
+  _PORT="TODO: 개발 서버 포트 (예: 3000)"
+  for _ef in "$TARGET/.env.local" "$TARGET/.env"; do
+    if [ -f "$_ef" ]; then
+      _v=$(grep -E '^PORT=' "$_ef" 2>/dev/null | head -1 | cut -d= -f2 | tr -d '"'"'" | tr -d ' ')
+      if [ -n "$_v" ]; then _PORT="$_v"; break; fi
+    fi
+  done
+  if [ "$_PORT" = "TODO: 개발 서버 포트 (예: 3000)" ] && [ -f "$TARGET/package.json" ]; then
+    _v=$(python3 -c "
+import json, re
+try:
+    p = json.load(open('$TARGET/package.json'))
+    for v in p.get('scripts', {}).values():
+        m = re.search(r'PORT=(\d{3,5})', str(v))
+        if m: print(m.group(1)); exit()
+    print('')
+except: print('')
+" 2>/dev/null)
+    if [ -n "$_v" ]; then _PORT="$_v"; fi
+  fi
+  if [ "$PROJECT_TYPE" = "nextjs" ] && [ "$_PORT" = "TODO: 개발 서버 포트 (예: 3000)" ]; then
+    _PORT="3000"
+  fi
+
+  # ── DB 감지 ────────────────────────────────────────────────────
+  _DB_TYPE="(없음)"
+  _DB_URL_MASKED=""
+  _DB_ORM="(없음)"
+
+  for _ef in "$TARGET/.env.local" "$TARGET/.env"; do
+    if [ -f "$_ef" ]; then
+      _raw=$(grep -E '^DATABASE_URL=' "$_ef" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"'"'")
+      if [ -n "$_raw" ]; then
+        if echo "$_raw" | grep -qi "postgres"; then _DB_TYPE="PostgreSQL"
+        elif echo "$_raw" | grep -qi "mysql";  then _DB_TYPE="MySQL"
+        elif echo "$_raw" | grep -qi "sqlite"; then _DB_TYPE="SQLite"
+        elif echo "$_raw" | grep -qi "mongodb"; then _DB_TYPE="MongoDB"
+        elif echo "$_raw" | grep -qi "redis";  then _DB_TYPE="Redis"
+        fi
+        _DB_URL_MASKED=$(echo "$_raw" | sed 's|:[^:@/][^:@/]*@|:***@|g')
+        break
+      fi
+    fi
+  done
+
+  # ORM 감지
+  if [ -f "$TARGET/prisma/schema.prisma" ]; then
+    _DB_ORM="Prisma"
+    if [ "$_DB_TYPE" = "(없음)" ]; then
+      _prov=$(grep -E '^\s*provider\s*=' "$TARGET/prisma/schema.prisma" 2>/dev/null | head -1 | cut -d'"' -f2)
+      case "$_prov" in
+        postgresql|postgres) _DB_TYPE="PostgreSQL" ;;
+        mysql)   _DB_TYPE="MySQL" ;;
+        sqlite)  _DB_TYPE="SQLite" ;;
+        mongodb) _DB_TYPE="MongoDB" ;;
+      esac
+    fi
+  fi
+  if [ -f "$TARGET/drizzle.config.ts" ] || [ -f "$TARGET/drizzle.config.js" ]; then _DB_ORM="Drizzle"; fi
+  if [ -f "$TARGET/typeorm.config.ts" ] || [ -f "$TARGET/ormconfig.json" ]; then _DB_ORM="TypeORM"; fi
+  if [ -f "$TARGET/manage.py" ]; then _DB_ORM="Django ORM"; fi
+
+  # ── 패키지 매니저 ──────────────────────────────────────────────
+  _PKG_MGR="npm"
+  if [ -f "$TARGET/pnpm-lock.yaml" ]; then _PKG_MGR="pnpm"
+  elif [ -f "$TARGET/yarn.lock" ]; then _PKG_MGR="yarn"
+  elif [ -f "$TARGET/bun.lockb" ]; then _PKG_MGR="bun"
+  fi
+
+  # ── 주요 명령어 ────────────────────────────────────────────────
+  _CMD_DEV="TODO"; _CMD_BUILD="TODO"; _CMD_TEST="TODO"; _CMD_DB=""
+  if [ -f "$TARGET/package.json" ]; then
+    _CMD_DEV=$(python3   -c "import json; p=json.load(open('$TARGET/package.json')); s=p.get('scripts',{}); print(s.get('dev', s.get('start','TODO')))" 2>/dev/null || echo "TODO")
+    _CMD_BUILD=$(python3 -c "import json; p=json.load(open('$TARGET/package.json')); print(p.get('scripts',{}).get('build','TODO'))" 2>/dev/null || echo "TODO")
+    _CMD_TEST=$(python3  -c "import json; p=json.load(open('$TARGET/package.json')); print(p.get('scripts',{}).get('test','TODO'))"  2>/dev/null || echo "TODO")
+    _CMD_DB=$(python3    -c "
+import json
+try:
+    s = json.load(open('$TARGET/package.json')).get('scripts', {})
+    for k in ['migrate','db:migrate','db:push','db:generate','migration']:
+        if k in s: print(f'$_PKG_MGR run {k}'); exit()
+    print('')
+except: print('')
+" 2>/dev/null)
+  elif [ -f "$TARGET/Makefile" ]; then
+    _CMD_DEV="make dev"; _CMD_BUILD="make build"; _CMD_TEST="make test"
+  elif [ -f "$TARGET/pyproject.toml" ] || [ -f "$TARGET/requirements.txt" ]; then
+    _CMD_DEV="uvicorn main:app --reload (또는 python manage.py runserver)"
+    _CMD_TEST="pytest"
+  fi
+
+  # ── 서비스 (docker-compose) ────────────────────────────────────
+  _SERVICES_BLOCK=""
+  for _cf in "$TARGET/docker-compose.yml" "$TARGET/docker-compose.yaml"; do
+    if [ -f "$_cf" ]; then
+      _SERVICES_BLOCK=$(python3 -c "
+try:
+    import yaml
+    d = yaml.safe_load(open('$_cf'))
+    for name, svc in d.get('services', {}).items():
+        ports = svc.get('ports', [])
+        port_str = ' (포트: ' + str(ports[0]) + ')' if ports else ''
+        img = svc.get('image', '')
+        img_str = ' [' + img + ']' if img else ''
+        print(f'- {name}{port_str}{img_str}')
+except ImportError:
+    import re
+    for line in open('$_cf'):
+        m = re.match(r'^  ([a-zA-Z][\w-]+):\s*$', line)
+        if m: print(f'- {m.group(1)}')
+except Exception as e:
+    print('(파싱 오류)')
+" 2>/dev/null)
+      break
+    fi
+  done
+
+  # ── 환경변수 키 목록 ───────────────────────────────────────────
+  _ENV_KEYS_BLOCK="(없음)"
+  for _ef in "$TARGET/.env.example" "$TARGET/.env.sample" "$TARGET/.env"; do
+    if [ -f "$_ef" ]; then
+      _keys=$(grep -E '^[A-Z_][A-Z0-9_]*=' "$_ef" 2>/dev/null | cut -d= -f1 | head -30 | sed 's/^/- /')
+      [ -n "$_keys" ] && { _ENV_KEYS_BLOCK="$_keys"; break; }
+    fi
+  done
+
+  # ── 파일 작성 ──────────────────────────────────────────────────
+  {
+    echo "# Project Facts — $PROJECT_NAME"
+    echo "> 세션 시작 시 **반드시** 읽어라. 포트, DB, 스택, 명령어 등 핵심 환경 정보."
+    echo "> 내용이 바뀌면 이 파일을 직접 수정하라."
+    echo "> 생성: $_FACTS_DATE | 스택: $PROJECT_TYPE"
+    echo ""
+    echo "---"
+    echo ""
+    echo "## 서버 / 포트"
+    echo ""
+    if echo "$_PORT" | grep -q "TODO"; then
+      echo "- **Dev 서버:** TODO — .env의 PORT 또는 package.json scripts에서 확인 후 기입"
+    else
+      echo "- **Dev 서버:** http://localhost:$_PORT"
+      echo "- **API 베이스:** http://localhost:$_PORT"
+    fi
+    echo ""
+    echo "---"
+    echo ""
+    echo "## 데이터베이스"
+    echo ""
+    echo "- **종류:** $_DB_TYPE"
+    echo "- **ORM / 클라이언트:** $_DB_ORM"
+    [ -n "$_DB_URL_MASKED" ] && echo "- **연결 (마스킹):** \`$_DB_URL_MASKED\`"
+    echo ""
+    echo "---"
+    echo ""
+    echo "## 스택"
+    echo ""
+    echo "- **프레임워크 / 타입:** $PROJECT_TYPE"
+    echo "- **패키지 매니저:** $_PKG_MGR"
+    echo ""
+    echo "---"
+    echo ""
+    echo "## 주요 명령어"
+    echo ""
+    echo '```sh'
+    echo "$_PKG_MGR run dev    # 개발 서버    → $_CMD_DEV"
+    echo "$_PKG_MGR run build  # 빌드         → $_CMD_BUILD"
+    echo "$_PKG_MGR run test   # 테스트       → $_CMD_TEST"
+    [ -n "$_CMD_DB" ] && echo "$_CMD_DB   # DB 마이그레이션"
+    echo '```'
+    if [ -n "$_SERVICES_BLOCK" ]; then
+      echo ""
+      echo "---"
+      echo ""
+      echo "## 서비스 구성 (docker-compose)"
+      echo ""
+      echo "$_SERVICES_BLOCK"
+    fi
+    echo ""
+    echo "---"
+    echo ""
+    echo "## 환경변수 키 목록"
+    echo ""
+    echo "$_ENV_KEYS_BLOCK"
+    echo ""
+    echo "---"
+    echo ""
+    echo "## 메모 (AI가 세션 중 발견한 추가 사실)"
+    echo ""
+    echo "(포트 변경, 특이사항, 주의할 설정 등을 여기에 기록)"
+  } > "$FACTS_OUT"
+
+  set -e  # 감지 완료 — set -e 복원
+  echo "✅ .collar/project-facts.md 생성 (포트: ${_PORT}, DB: ${_DB_TYPE}, ORM: ${_DB_ORM})"
+fi
+
 # ── .collar/memory.md (프로젝트 메모리) ─────────────────────────────
 mkdir -p "$TARGET/.collar"
 MEMORY_OUT="$TARGET/.collar/memory.md"
