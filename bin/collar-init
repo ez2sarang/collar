@@ -379,6 +379,17 @@ EOF
   echo "✅ .claude/settings.json 생성"
 fi
 
+# ── .npmrc (패키지 공급망 보안) ──────────────────────────────────────
+NPMRC_OUT="$TARGET/.npmrc"
+
+if [ ! -f "$NPMRC_OUT" ]; then
+  cat > "$NPMRC_OUT" << 'EOF'
+min-release-age=3
+ignore-scripts=true
+EOF
+  echo "✅ .npmrc 생성 (min-release-age=3, ignore-scripts=true)"
+fi
+
 # ── .collar/memory.md (프로젝트 메모리) ─────────────────────────────
 mkdir -p "$TARGET/.collar"
 MEMORY_OUT="$TARGET/.collar/memory.md"
