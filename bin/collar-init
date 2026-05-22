@@ -461,7 +461,7 @@ config = {
 import pathlib
 pathlib.Path(out).write_text(json.dumps(config, ensure_ascii=False, indent=2))
 PYEOF
-  echo "✅ .collar/config.json 생성 (언어: $LANG_LABEL, 라우팅: $_SIMPLE_PROVIDER→$_STANDARD_PROVIDER→$_COMPLEX_PROVIDER)"
+  echo "✅ .collar/config.json 생성 (언어: $LANG_LABEL, 라우팅: ${_SIMPLE_PROVIDER}→${_STANDARD_PROVIDER}→${_COMPLEX_PROVIDER})"
 fi
 
 # ── .collar/hooks 설치 (collar-hooks 템플릿) ─────────────────────
