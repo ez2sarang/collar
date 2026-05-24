@@ -48,6 +48,11 @@ echo "✅ bin/ 설치 완료 ($(ls "$SCRIPT_DIR/bin/" | wc -l | tr -d ' ')개 �
 cp -r "$SCRIPT_DIR/templates/"* "$INSTALL_DIR/templates/"
 echo "✅ templates/ 설치 완료"
 
+# package/prompts/ 복사 (collar-conductor 에이전트 프롬프트)
+mkdir -p "$INSTALL_DIR/package/prompts"
+cp -r "$SCRIPT_DIR/package/prompts/"* "$INSTALL_DIR/package/prompts/"
+echo "✅ package/prompts/ 설치 완료 ($(ls "$SCRIPT_DIR/package/prompts/" | wc -l | tr -d ' ')개 프롬프트)"
+
 # ── PATH 안내 ─────────────────────────────────────────────────────────
 echo ""
 SHELL_RC=""
