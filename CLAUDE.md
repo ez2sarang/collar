@@ -59,7 +59,8 @@ collar/
 │   ├── collar-global         # 글로벌 규칙/메모리를 ~/.claude/CLAUDE.md에 LLM 중복 제거 후 병합
 │   ├── collar-eval-model     # 멀티 프로바이더 모델 평가 → simple/standard/complex 카테고리 배치
 │   ├── collar-usage          # Claude Max / Gemini Pro 구독 사용량 현황 요약
-│   └── collar-template-sync  # 글로벌 규칙-템플릿 갭 LLM 분석 + 자동 동기화
+│   ├── collar-template-sync  # 글로벌 규칙-템플릿 갭 LLM 분석 + 자동 동기화
+│   └── collar-conductor      # 관리·감독 오케스트레이터 (Executor→Verifier 루프, 합의 기반 완료)
 ├── package/               # npm 패키지 (collar-cli, TypeScript)
 │   ├── src/cli/               # CLI 명령어 (init, setup, global, doctor)
 │   ├── src/mcp/               # MCP 서버 + 상태/게이트/에이전트 도구

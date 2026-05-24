@@ -1,0 +1,335 @@
+#!/usr/bin/env bash
+# collar-conductor — 관리·감독 에이전트 오케스트레이터
+#
+# 동작:
+#   1. Executor 에이전트에게 태스크 위임 (실제 코드 변경)
+#   2. 완료 후 Verifier 에이전트가 독립 검증
+#   3. NEEDS_WORK → Executor 재작업 지시 (최대 N 라운드)
+#   4. APPROVED → 완료 선언 + 로그 기록
+#   5. 최대 라운드 초과 → 사용자 에스컬레이션
+#
+# 사용법:
+#   collar-conductor run "태스크 설명"              기본 실행 (3 라운드)
+#   collar-conductor run "태스크 설명" --rounds 5   라운드 수 지정
+#   collar-conductor run "태스크 설명" --model complex  복잡도 모델 선택
+#   collar-conductor log                           실행 이력 보기
+#   collar-conductor status                        마지막 실행 상태
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COLLAR_HOME="${COLLAR_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+PROMPTS_DIR="$COLLAR_HOME/package/prompts"
+TARGET="${COLLAR_CONDUCTOR_TARGET:-$(pwd)}"
+
+SUBCOMMAND="${1:-help}"
+
+# ── 헬퍼 ──────────────────────────────────────────────────────────
+die()  { echo "❌ $*" >&2; exit 1; }
+log()  { echo "[collar-conductor] $*"; }
+
+# ── 서브커맨드 파싱 ────────────────────────────────────────────────
+case "$SUBCOMMAND" in
+
+  run)
+    TASK="${2:-}"
+    [ -z "$TASK" ] && die "사용법: collar-conductor run \"태스크 설명\" [--rounds N] [--model simple|standard|complex]"
+
+    MAX_ROUNDS=3
+    MODEL_TIER="standard"
+    shift 2 || true
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --rounds) MAX_ROUNDS="${2:-3}"; shift 2 ;;
+        --model)  MODEL_TIER="${2:-standard}"; shift 2 ;;
+        *) shift ;;
+      esac
+    done
+
+    log "태스크: $TASK"
+    log "최대 라운드: $MAX_ROUNDS | 모델 티어: $MODEL_TIER"
+    log "대상 디렉토리: $TARGET"
+
+    python3 - "$TASK" "$TARGET" "$MAX_ROUNDS" "$MODEL_TIER" "$PROMPTS_DIR" <<'PYEOF'
+import sys, os, subprocess, json, time, glob, datetime, pathlib, urllib.request
+
+task        = sys.argv[1]
+target_dir  = sys.argv[2]
+max_rounds  = int(sys.argv[3])
+model_tier  = sys.argv[4]
+prompts_dir = sys.argv[5]
+
+# ── 모델 매핑 ──────────────────────────────────────────────────────
+MODEL_MAP = {
+    "simple":   "claude-haiku-4-5-20251001",
+    "standard": "claude-sonnet-4-6",
+    "complex":  "claude-opus-4-7",
+}
+EXECUTOR_MODEL  = MODEL_MAP.get(model_tier, MODEL_MAP["standard"])
+VERIFIER_MODEL  = MODEL_MAP["standard"]  # verifier는 항상 sonnet
+
+# ── claude 바이너리 탐색 ───────────────────────────────────────────
+def find_claude():
+    candidates = [
+        "/opt/homebrew/bin/claude",
+        "/usr/local/bin/claude",
+    ] + glob.glob(os.path.expanduser("~/.nvm/versions/node/*/bin/claude")) \
+      + glob.glob(os.path.expanduser("~/.local/share/fnm/node-versions/*/installation/bin/claude"))
+    return next((p for p in candidates if os.path.isfile(p)), None)
+
+# ── claude 실행 ────────────────────────────────────────────────────
+def run_claude(claude_bin, prompt, model, cwd, timeout=300):
+    proc = subprocess.run(
+        [claude_bin, "--print", "--model", model],
+        input=prompt,
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+        timeout=timeout,
+    )
+    return proc.stdout.strip(), proc.returncode
+
+# ── git diff ───────────────────────────────────────────────────────
+def get_git_diff(cwd):
+    r = subprocess.run(["git", "diff", "HEAD"], capture_output=True, text=True, cwd=cwd)
+    return r.stdout
+
+# ── verifier 출력 파싱 ─────────────────────────────────────────────
+def parse_status(output):
+    for line in output.splitlines():
+        stripped = line.strip()
+        if stripped.upper().startswith("CONDUCTOR_STATUS:"):
+            return stripped.split(":", 1)[1].strip().upper()
+    return "UNKNOWN"
+
+def parse_notes(output):
+    lines  = output.splitlines()
+    notes  = []
+    active = False
+    for line in lines:
+        if line.strip().upper().startswith("CONDUCTOR_NOTES:"):
+            active = True
+            rest = line.split(":", 1)[1].strip()
+            if rest:
+                notes.append(rest)
+        elif active:
+            if line.strip().upper().startswith("CONDUCTOR_STATUS:"):
+                break
+            notes.append(line)
+    return "\n".join(notes).strip()
+
+# ── 프롬프트 로드 ──────────────────────────────────────────────────
+def load_prompt(name):
+    path = os.path.join(prompts_dir, f"{name}.md")
+    if os.path.exists(path):
+        with open(path) as f:
+            return f.read()
+    return ""
+
+# ── LLM 로그 ──────────────────────────────────────────────────────
+def log_to_api(model, status, prompt_summary, response_summary):
+    try:
+        payload = json.dumps({
+            "provider": "anthropic",
+            "model": model,
+            "status": status,
+            "prompt": prompt_summary[:80],
+            "response": response_summary[:200],
+        }).encode()
+        req = urllib.request.Request(
+            "http://localhost:3999/api/llm-logs",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        urllib.request.urlopen(req, timeout=3)
+    except Exception:
+        pass
+
+# ── 메인 루프 ─────────────────────────────────────────────────────
+def main():
+    claude_bin = find_claude()
+    if not claude_bin:
+        print("❌ claude 바이너리를 찾을 수 없습니다.")
+        sys.exit(1)
+
+    collar_dir = os.path.join(target_dir, ".collar")
+    log_file   = os.path.join(collar_dir, "conductor-log.md")
+    os.makedirs(collar_dir, exist_ok=True)
+
+    executor_base = load_prompt("executor")
+    verifier_base = load_prompt("verifier")
+    session_id    = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    feedback      = ""
+    approved      = False
+    last_round    = 0
+
+    # 세션 헤더 기록
+    with open(log_file, "a") as f:
+        f.write(f"\n---\n# Conductor Session {session_id}\n\n"
+                f"**태스크**: {task}\n"
+                f"**시작**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"**최대 라운드**: {max_rounds}\n\n")
+
+    for round_num in range(1, max_rounds + 1):
+        last_round = round_num
+        sep = "=" * 60
+        print(f"\n{sep}")
+        print(f"🎯 [Round {round_num}/{max_rounds}] Executor 실행 중...")
+        print(sep)
+
+        # ── Executor 프롬프트 조립 ─────────────────────────────────
+        exec_prompt = executor_base + f"""
+
+---
+## 현재 태스크
+
+{task}
+
+## 작업 디렉토리
+{target_dir}
+"""
+        if feedback:
+            exec_prompt += (
+                f"\n## ⚠️ 이전 라운드 피드백 (반드시 반영)\n\n{feedback}\n\n"
+                "위 피드백 항목을 모두 수정한 뒤 다시 완료 요약을 작성하라."
+            )
+        exec_prompt += "\n\n작업 완료 후 변경한 파일과 변경 내용을 3줄 이내로 요약하라."
+
+        exec_out, exec_rc = run_claude(claude_bin, exec_prompt, EXECUTOR_MODEL, target_dir)
+        print(f"   → Executor 완료 (exit: {exec_rc})")
+
+        # ── git diff 수집 ──────────────────────────────────────────
+        diff = get_git_diff(target_dir)
+
+        print(f"\n🔍 [Round {round_num}/{max_rounds}] Verifier 검증 중...")
+
+        # ── Verifier 프롬프트 조립 ─────────────────────────────────
+        ver_prompt = verifier_base + f"""
+
+---
+## 검증 대상
+
+### 원래 태스크
+{task}
+
+### Executor 작업 요약
+{exec_out[:3000] or "(출력 없음)"}
+
+### Git Diff (변경사항)
+```diff
+{diff[:6000] or "(변경사항 없음)"}
+```
+
+## 응답 형식 (반드시 준수)
+
+변경사항 검토 후 아래 두 줄 중 하나로 시작하여 응답하라:
+
+CONDUCTOR_STATUS: APPROVED
+또는
+CONDUCTOR_STATUS: NEEDS_WORK
+
+CONDUCTOR_NOTES:
+- 승인 이유 또는 재작업 항목을 구체적으로 기술
+- NEEDS_WORK 인 경우 Executor가 다음 라운드에서 수정해야 할 항목을 명시
+"""
+
+        ver_out, _  = run_claude(claude_bin, ver_prompt, VERIFIER_MODEL, target_dir)
+        status       = parse_status(ver_out)
+        notes        = parse_notes(ver_out)
+
+        print(f"   → Verifier 결과: {status}")
+        if notes:
+            preview = notes[:300].replace("\n", " ")
+            print(f"   → 노트: {preview}...")
+
+        # ── 라운드 로그 기록 ───────────────────────────────────────
+        with open(log_file, "a") as f:
+            f.write(
+                f"## Round {round_num} — {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+                f"**Executor 모델**: `{EXECUTOR_MODEL}`\n"
+                f"**Verifier 결과**: `{status}`\n\n"
+                f"### Verifier 노트\n{notes}\n\n"
+                f"### Executor 요약\n{exec_out[:800] or '(없음)'}\n\n---\n\n"
+            )
+
+        # ── 분기 ──────────────────────────────────────────────────
+        if status == "APPROVED":
+            print(f"\n✅ APPROVED — 작업 완료! (Round {round_num}/{max_rounds})")
+            approved = True
+            break
+        elif status == "NEEDS_WORK":
+            feedback = notes
+            if round_num < max_rounds:
+                print(f"\n🔄 재작업 지시 → Round {round_num + 1} 시작")
+            else:
+                print(f"\n⚠️  최대 라운드 {max_rounds} 초과 — 사용자 에스컬레이션 필요")
+                print(f"\n마지막 피드백:\n{notes}")
+        else:
+            print(f"   ⚠️ 상태 파싱 실패 ({status}). APPROVED로 간주합니다.")
+            approved = True
+            break
+
+    # ── 세션 종료 로그 ─────────────────────────────────────────────
+    final = "APPROVED" if approved else f"ESCALATED (라운드 {last_round} 후 미합의)"
+    with open(log_file, "a") as f:
+        f.write(f"## 세션 종료\n\n**결과**: {final}\n**완료**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+
+    print(f"\n[collar-conductor] 로그: {log_file}")
+
+    log_to_api(
+        EXECUTOR_MODEL,
+        "success" if approved else "error",
+        f"conductor: {task[:50]}",
+        f"rounds={last_round}, result={final}",
+    )
+
+    sys.exit(0 if approved else 1)
+
+main()
+PYEOF
+    ;;
+
+  log)
+    LOGFILE="$TARGET/.collar/conductor-log.md"
+    [ -f "$LOGFILE" ] && cat "$LOGFILE" || log "로그 없음 ($LOGFILE)"
+    ;;
+
+  status)
+    LOGFILE="$TARGET/.collar/conductor-log.md"
+    if [ ! -f "$LOGFILE" ]; then
+      log "실행 이력 없음"
+    else
+      echo "=== 마지막 실행 상태 ==="
+      grep -E "^## (Conductor Session|Round|세션 종료)|^\*\*(결과|태스크)\*\*" "$LOGFILE" | tail -20
+    fi
+    ;;
+
+  help|*)
+    cat <<'HELP'
+collar-conductor — 관리·감독 에이전트 오케스트레이터
+
+사용법:
+  collar-conductor run "태스크 설명"                기본 실행 (3 라운드, sonnet)
+  collar-conductor run "태스크 설명" --rounds 5     라운드 수 지정
+  collar-conductor run "태스크 설명" --model complex  opus 사용 (복잡한 태스크)
+  collar-conductor log                              전체 실행 이력
+  collar-conductor status                           마지막 실행 상태 요약
+
+환경변수:
+  COLLAR_CONDUCTOR_TARGET   작업 대상 디렉토리 (기본: 현재 디렉토리)
+
+동작 흐름:
+  [Conductor]
+     ↓ 태스크 배분
+  [Executor] → 코드 변경
+     ↓ 결과 + git diff
+  [Verifier] → APPROVED / NEEDS_WORK
+     ↓ NEEDS_WORK
+  [Executor] → 피드백 반영 재작업
+     ↓ (최대 N 라운드)
+  [완료 또는 사용자 에스컬레이션]
+HELP
+    ;;
+
+esac
