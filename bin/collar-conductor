@@ -300,8 +300,36 @@ PYEOF
     if [ ! -f "$LOGFILE" ]; then
       log "실행 이력 없음"
     else
-      echo "=== 마지막 실행 상태 ==="
-      grep -E "^## (Conductor Session|Round|세션 종료)|^\*\*(결과|태스크)\*\*" "$LOGFILE" | tail -20
+      python3 - "$LOGFILE" <<'PYEOF'
+import sys, re
+
+logfile = sys.argv[1]
+with open(logfile) as f:
+    content = f.read()
+
+# 실제 세션 헤더: "# Conductor Session YYYYMMDD_HHMMSS" 타임스탬프 형식만
+parts = re.split(r'(?=^# Conductor Session \d{8}_\d{6})', content, flags=re.MULTILINE)
+sessions = [p.strip() for p in parts if re.search(r'^# Conductor Session \d{8}_\d{6}', p, re.MULTILINE)]
+
+if not sessions:
+    print("실행 이력 없음")
+    sys.exit(0)
+
+last = sessions[-1]
+# 타임스탬프 형식(\d{8}_\d{6})으로만 실제 세션 헤더 매칭
+session_m = re.search(r'^# Conductor Session (\d{8}_\d{6})', last, re.MULTILINE)
+task_m    = re.search(r'^\*\*태스크\*\*[:\s]+(.+)', last, re.MULTILINE)
+rounds_m  = re.findall(r'^## Round \d+', last, re.MULTILINE)
+result_m  = re.search(r'^\*\*결과\*\*[:\s]+(.+)', last, re.MULTILINE)
+
+task_str = task_m.group(1).strip()[:60] + '…' if task_m else '알 수 없음'
+
+print("=== 마지막 세션 상태 ===")
+print(f"세션  : {session_m.group(1) if session_m else '알 수 없음'}")
+print(f"태스크: {task_str}")
+print(f"라운드: {len(rounds_m)}회")
+print(f"결과  : {result_m.group(1).strip() if result_m else '알 수 없음'}")
+PYEOF
     fi
     ;;
 
