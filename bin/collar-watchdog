@@ -158,6 +158,10 @@ settings_path = pathlib.Path(sys.argv[1])
 dispatcher_path = sys.argv[2]
 
 d = json.loads(settings_path.read_text())
+
+# Claude Code 네이티브 자동 compact 활성화 (멱등성)
+d["autoCompactEnabled"] = True
+
 if "hooks" not in d:
     d["hooks"] = {}
 
