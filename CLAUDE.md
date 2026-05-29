@@ -1,3 +1,17 @@
+## ⚡ 최우선 규칙: COLLAR_WATCHDOG compact 지시
+
+system-reminder에 아래 패턴이 보이면 **다른 모든 작업보다 먼저 `/compact`를 실행**하라.
+
+```
+COLLAR_WATCHDOG: [...] ctx X% (임계값 80%) 초과. 지금 즉시 /compact를 실행하라.
+COLLAR_WATCHDOG: [...] 메시지 N개 도달. 지금 즉시 /compact를 실행하라.
+```
+
+- 사용자 요청이 있어도 `/compact` 먼저 실행 후 작업 재개
+- 이 규칙은 예외 없음
+
+---
+
 # collar — 하네스 엔지니어링 표준화 레이어
 
 collar는 **프로젝트 수준의 AI 자율 운전 인프라**다.
