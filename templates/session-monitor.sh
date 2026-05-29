@@ -195,7 +195,7 @@ fi
 
 # ── Claude에 알림 출력 ─────────────────────────────────────────────
 if [ "$USE_MSG_FALLBACK" = "true" ]; then
-  echo "COLLAR_WATCHDOG: [$TS] 메시지 ${MSG_THRESHOLD}개 도달 → session-compact.md 갱신. 새 세션 권장."
+  echo "COLLAR_WATCHDOG: [$TS] 메시지 ${MSG_THRESHOLD}개 도달. 지금 즉시 /compact를 실행하라."
 else
-  echo "COLLAR_WATCHDOG: [$TS] ctx ${CTX_PCT}% (임계값 ${CTX_THRESHOLD}%) → session-compact.md 갱신. 새 세션 권장."
+  echo "COLLAR_WATCHDOG: [$TS] ctx ${CTX_PCT}% (임계값 ${CTX_THRESHOLD}%) 초과. 지금 즉시 /compact를 실행하라."
 fi
