@@ -692,6 +692,10 @@ PYEOF
   echo "✅ .collar/config.json 생성 (언어: $LANG_LABEL, 라우팅: ${_SIMPLE_PROVIDER}→${_STANDARD_PROVIDER}→${_COMPLEX_PROVIDER})"
 fi
 
+# ── .collar/tasks/ 생성 (요청사항 체크리스트 추적용) ───────────────
+mkdir -p "$TARGET/.collar/tasks"
+echo "✅ .collar/tasks/ 생성 (요청 체크리스트 문서 저장소)"
+
 # ── .collar/hooks 설치 (collar-hooks 템플릿) ─────────────────────
 mkdir -p "$TARGET/.collar/hooks"
 HOOKS_SRC="$COLLAR_HOME/templates/collar-hooks"
