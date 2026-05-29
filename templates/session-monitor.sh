@@ -116,8 +116,22 @@ if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
   TRANSCRIPT_BYTES="$(wc -c < "$TRANSCRIPT" 2>/dev/null || echo 0)"
   # compact 이후 delta로 ctx% 계산 (절대값 사용 시 compact 후에도 100% 오탐 발생)
   BASELINE_FILE="$COLLAR_DIR/.transcript-baseline"
+  BASELINE_SESSION_FILE="$COLLAR_DIR/.baseline-session-id"
+
+  # 세션 ID 추출 (transcript 파일명 = 세션 UUID)
+  CURRENT_SESSION_ID="$(basename "$TRANSCRIPT" .jsonl)"
+  SAVED_SESSION_ID=""
+  [ -f "$BASELINE_SESSION_FILE" ] && SAVED_SESSION_ID="$(cat "$BASELINE_SESSION_FILE" 2>/dev/null || echo '')"
+
   BASELINE_BYTES=0
-  [ -f "$BASELINE_FILE" ] && BASELINE_BYTES="$(cat "$BASELINE_FILE" 2>/dev/null || echo 0)"
+  if [ "$CURRENT_SESSION_ID" != "$SAVED_SESSION_ID" ]; then
+    # 새 세션 감지 → baseline 리셋 (이전 세션 크기를 기준값으로 쓰면 delta가 음수가 됨)
+    echo "0" > "$BASELINE_FILE"
+    echo "$CURRENT_SESSION_ID" > "$BASELINE_SESSION_FILE"
+  else
+    [ -f "$BASELINE_FILE" ] && BASELINE_BYTES="$(cat "$BASELINE_FILE" 2>/dev/null || echo 0)"
+  fi
+
   DELTA_BYTES=$(( TRANSCRIPT_BYTES - BASELINE_BYTES ))
   [ "$DELTA_BYTES" -lt 0 ] && DELTA_BYTES=0
   # 200K tokens at 4.5 bytes/token = 900000 bytes (compact 이후 누적분만 측정)
@@ -173,6 +187,7 @@ cd "$PROJECT_DIR" && "$COLLAR_COMPACT_BIN" 2>/dev/null
 # compact 직후 transcript baseline 저장 (다음 ctx% 계산 기준점)
 if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
   wc -c < "$TRANSCRIPT" 2>/dev/null > "$COLLAR_DIR/.transcript-baseline" || true
+  basename "$TRANSCRIPT" .jsonl > "$COLLAR_DIR/.baseline-session-id" 2>/dev/null || true
 fi
 
 # 카운터 리셋 (폴백 모드일 때)
