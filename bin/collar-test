@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# collar-test — collar 전체 테스트 수트 실행
+#
+# 사용법:
+#   collar-test              # 전체 테스트
+#   collar-test --unit       # 단위 테스트만
+#   collar-test --integration # 통합 테스트만
+#   collar-test --e2e        # e2e 테스트만
+#   collar-test --fast       # claude CLI 불필요 테스트만 (CI 친화적)
+#   collar-test --file <path> # 특정 테스트 파일만
+#   collar-test --watch      # 파일 변경 감지 후 자동 재실행 (fswatch 필요)
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COLLAR_HOME="${COLLAR_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+TESTS_DIR="$COLLAR_HOME/tests"
+
+if [ ! -f "$TESTS_DIR/run-tests.sh" ]; then
+  echo "❌ 테스트 수트를 찾을 수 없습니다: $TESTS_DIR/run-tests.sh"
+  echo "   collar 레포 루트에서 실행 중인지 확인하세요."
+  exit 1
+fi
+
+# --watch 모드: 파일 변경 시 자동 재실행
+if [ "${1:-}" = "--watch" ]; then
+  if ! command -v fswatch > /dev/null 2>&1; then
+    echo "❌ --watch 모드에는 fswatch가 필요합니다: brew install fswatch"
+    exit 1
+  fi
+  echo "👀 파일 변경 감시 중 (bin/ templates/ tests/ — Ctrl+C로 종료)"
+  fswatch -o "$COLLAR_HOME/bin" "$COLLAR_HOME/templates" "$COLLAR_HOME/tests" | \
+    while read -r; do
+      clear
+      echo "🔄 변경 감지 → 테스트 재실행..."
+      bash "$TESTS_DIR/run-tests.sh" --fast || true
+    done
+  exit 0
+fi
+
+exec bash "$TESTS_DIR/run-tests.sh" "$@"
