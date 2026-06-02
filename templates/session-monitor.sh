@@ -23,7 +23,7 @@ CONFIG_FILE="$COLLAR_DIR/config.json"
 PROJECT_DIR="$(cd "$COLLAR_DIR/.." && pwd)"
 
 # ── 설정값 읽기 ────────────────────────────────────────────────────
-CTX_THRESHOLD=60   # %: 이 이상이면 compact 실행
+CTX_THRESHOLD=80   # %: 이 이상이면 compact 실행
 CTX_TARGET=15      # %: compact 목표 수준 (collar-compact에 전달)
 MSG_THRESHOLD=20   # 폴백: transcript 없을 때 메시지 카운트
 AUTO_COMPACT=true
