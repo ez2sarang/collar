@@ -43,9 +43,9 @@ trap "rm -f $CONTEXT_FILE" EXIT
   # 기존 compact가 있으면 이전 요약도 포함
   if [ -f "$COMPACT_FILE" ]; then
     # Hashline 검증
-    STORED_HASH=$(grep -o 'COLLAR_HASH: [a-f0-9]*' "$COMPACT_FILE" 2>/dev/null | awk '{print $2}')
+    STORED_HASH=$(grep -o 'COLLAR_HASH: [a-f0-9]*' "$COMPACT_FILE" 2>/dev/null | awk '{print $2}') || true
     if [ -n "$STORED_HASH" ]; then
-      CONTENT_WITHOUT_HASH=$(grep -v "COLLAR_HASH:" "$COMPACT_FILE")
+      CONTENT_WITHOUT_HASH=$(grep -v "COLLAR_HASH:" "$COMPACT_FILE" || true)
       ACTUAL_HASH=$(printf '%s' "$CONTENT_WITHOUT_HASH" | sha256sum 2>/dev/null | cut -c1-8 || printf '%s' "$CONTENT_WITHOUT_HASH" | md5sum | cut -c1-8)
       if [ "$STORED_HASH" != "$ACTUAL_HASH" ]; then
         echo "⚠️  [Hashline] session-compact.md 해시 불일치 — 외부 수정 감지"
