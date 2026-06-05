@@ -361,12 +361,24 @@ else
   echo "✅ AGENTS.md 생성: $AGENTS_OUT"
 fi
 
-# ── .claude/settings.json (기본) ─────────────────────────────────
+# ── .collar/collar-dispatcher.sh 설치 ───────────────────────────
+DISPATCHER_SRC="$COLLAR_HOME/templates/collar-dispatcher.sh"
+DISPATCHER_OUT="$TARGET/.collar/collar-dispatcher.sh"
+mkdir -p "$TARGET/.collar"
+
+if [ ! -f "$DISPATCHER_OUT" ] && [ -f "$DISPATCHER_SRC" ]; then
+  cp "$DISPATCHER_SRC" "$DISPATCHER_OUT"
+  chmod +x "$DISPATCHER_OUT"
+  echo "✅ .collar/collar-dispatcher.sh 설치"
+fi
+
+# ── .claude/settings.json (훅 포함) ──────────────────────────────
 mkdir -p "$TARGET/.claude"
 SETTINGS_OUT="$TARGET/.claude/settings.json"
+DISPATCHER_ABS="$TARGET/.collar/collar-dispatcher.sh"
 
 if [ ! -f "$SETTINGS_OUT" ]; then
-  cat > "$SETTINGS_OUT" << 'EOF'
+  cat > "$SETTINGS_OUT" << EOF
 {
   "permissions": {
     "allow": [
@@ -380,10 +392,56 @@ if [ ! -f "$SETTINGS_OUT" ]; then
       "Bash(curl * | bash)",
       "Bash(wget * | sh)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '$DISPATCHER_ABS'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '$DISPATCHER_ABS'",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '$DISPATCHER_ABS'",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash '$DISPATCHER_ABS'",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
   }
 }
 EOF
-  echo "✅ .claude/settings.json 생성"
+  echo "✅ .claude/settings.json 생성 (PreToolUse/PostToolUse/SessionStart 훅 포함)"
 fi
 
 # ── .npmrc (패키지 공급망 보안) ──────────────────────────────────────
