@@ -68,21 +68,8 @@ for _p in "${_PROVS[@]}"; do
   esac
 done
 
-# ── ultracode 옵션 ─────────────────────────────────────────────────
+# ── ultracode 옵션 (기본값 false — 필요 시 settings.json에서 수동 활성화) ────
 ULTRACODE_ENABLED=false
-if [ -t 0 ]; then
-  echo "⚡ ultracode 모드를 활성화하겠습니까?"
-  echo "   Opus 모델 + xhigh 추론 + 자동 멀티에이전트 오케스트레이션"
-  echo "   주의: 토큰 소모 증가 / Opus 4.7+ 모델 필요"
-  read -r -p "   [y/N]: " _UC_SEL
-  case "${_UC_SEL:-N}" in
-    y|Y) ULTRACODE_ENABLED=true ; echo "   → ultracode 활성화" ;;
-    *)   ULTRACODE_ENABLED=false; echo "   → 기본 모드 유지" ;;
-  esac
-else
-  ULTRACODE_ENABLED=false
-fi
-echo ""
 
 # Gemini API 키 설정
 GEMINI_API_KEY_VAL=""
