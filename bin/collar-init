@@ -67,6 +67,21 @@ for _p in "${_PROVS[@]}"; do
     4) HAS_CEREBRAS=true ;;
   esac
 done
+
+# ── ultracode 옵션 ─────────────────────────────────────────────────
+ULTRACODE_ENABLED=false
+if [ -t 0 ]; then
+  echo "⚡ ultracode 모드를 활성화하겠습니까?"
+  echo "   Opus 모델 + xhigh 추론 + 자동 멀티에이전트 오케스트레이션"
+  echo "   주의: 토큰 소모 증가 / Opus 4.7+ 모델 필요"
+  read -r -p "   [y/N]: " _UC_SEL
+  case "${_UC_SEL:-N}" in
+    y|Y) ULTRACODE_ENABLED=true ; echo "   → ultracode 활성화" ;;
+    *)   ULTRACODE_ENABLED=false; echo "   → 기본 모드 유지" ;;
+  esac
+else
+  ULTRACODE_ENABLED=false
+fi
 echo ""
 
 # Gemini API 키 설정
@@ -378,70 +393,31 @@ SETTINGS_OUT="$TARGET/.claude/settings.json"
 DISPATCHER_ABS="$TARGET/.collar/collar-dispatcher.sh"
 
 if [ ! -f "$SETTINGS_OUT" ]; then
-  cat > "$SETTINGS_OUT" << EOF
-{
+  python3 - << PYEOF
+import json, pathlib
+
+dispatcher = "${DISPATCHER_ABS}"
+settings = {
   "permissions": {
-    "allow": [
-      "Bash(git *)",
-      "Bash(pnpm *)",
-      "Bash(npm *)",
-      "Bash(uv *)"
-    ],
-    "deny": [
-      "Bash(rm -rf /)",
-      "Bash(curl * | bash)",
-      "Bash(wget * | sh)"
-    ]
+    "allow": ["Bash(git *)", "Bash(pnpm *)", "Bash(npm *)", "Bash(uv *)"],
+    "deny":  ["Bash(rm -rf /)", "Bash(curl * | bash)", "Bash(wget * | sh)"]
   },
   "hooks": {
-    "PreToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash '$DISPATCHER_ABS'",
-            "timeout": 10
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash '$DISPATCHER_ABS'",
-            "timeout": 60
-          }
-        ]
-      }
-    ],
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash '$DISPATCHER_ABS'",
-            "timeout": 30
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash '$DISPATCHER_ABS'",
-            "timeout": 60
-          }
-        ]
-      }
-    ]
+    "PreToolUse":      [{"hooks": [{"type": "command", "command": f"bash '{dispatcher}'", "timeout": 10}]}],
+    "UserPromptSubmit":[{"hooks": [{"type": "command", "command": f"bash '{dispatcher}'", "timeout": 60}]}],
+    "SessionStart":    [{"hooks": [{"type": "command", "command": f"bash '{dispatcher}'", "timeout": 30}]}],
+    "PostToolUse":     [{"hooks": [{"type": "command", "command": f"bash '{dispatcher}'", "timeout": 60}]}]
   }
 }
-EOF
-  echo "✅ .claude/settings.json 생성 (PreToolUse/PostToolUse/SessionStart 훅 포함)"
+
+if "${ULTRACODE_ENABLED}" == "true":
+    settings["ultracode"] = True
+    settings["model"] = "claude-opus-4-8"
+
+pathlib.Path("${SETTINGS_OUT}").write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
+PYEOF
+  UC_MSG=$([ "$ULTRACODE_ENABLED" = "true" ] && echo " + ultracode(Opus)" || echo "")
+  echo "✅ .claude/settings.json 생성 (훅 포함${UC_MSG})"
 fi
 
 # ── .npmrc (패키지 공급망 보안) ──────────────────────────────────────
@@ -723,7 +699,8 @@ if [ ! -f "$CONFIG_OUT" ]; then
     "$PROJECT_NAME" "$PROJECT_GOAL" "$COLLAR_LANG" "$PROJECT_TYPE" \
     "$_SIMPLE_PROVIDER" "$_SIMPLE_MODEL" \
     "$_STANDARD_PROVIDER" "$_STANDARD_MODEL" \
-    "$_COMPLEX_PROVIDER" "$_COMPLEX_MODEL" << PYEOF
+    "$_COMPLEX_PROVIDER" "$_COMPLEX_MODEL" \
+    "$ULTRACODE_ENABLED" << PYEOF
 import sys, json, datetime
 
 out = sys.argv[1]
@@ -731,6 +708,7 @@ proj, goal, lang, ptype = sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 s_prov, s_model = sys.argv[6], sys.argv[7]
 t_prov, t_model = sys.argv[8], sys.argv[9]
 c_prov, c_model = sys.argv[10], sys.argv[11]
+ultracode = sys.argv[12] == "true"
 
 config = {
   "project": proj,
@@ -738,6 +716,7 @@ config = {
   "language": lang,
   "type": ptype,
   "created": datetime.date.today().isoformat(),
+  "ultracode": ultracode,
   "routing": {
     "simple":   {"provider": s_prov, "model": s_model},
     "standard": {"provider": t_prov, "model": t_model},
