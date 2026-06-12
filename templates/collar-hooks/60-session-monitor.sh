@@ -99,8 +99,8 @@ fi
 # ── ctx% 추정 ─────────────────────────────────────────────────────
 # Claude Code는 200K 토큰 컨텍스트를 사용.
 # transcript JSONL 파일 크기로 대화 누적량을 추정한다.
-# JSONL에서 실제 토큰으로의 변환 비율: ~4.5 bytes/token (JSON 오버헤드 포함)
-# 200K tokens × 4.5 = 900KB → 100%
+# JSONL에서 실제 토큰으로의 변환 비율: ~37 bytes/token (tool 결과·파일 내용·JSON 래퍼 포함)
+# 200K tokens × 37 = 7.4MB → 100%  (실측: 1MB delta ≈ Claude Code ctx 14%, 역산 ~7MB=100%)
 TRANSCRIPT="$(echo "$HOOK_DATA" | python3 -c "
 import json,sys
 try:
@@ -134,8 +134,8 @@ if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
 
   DELTA_BYTES=$(( TRANSCRIPT_BYTES - BASELINE_BYTES ))
   [ "$DELTA_BYTES" -lt 0 ] && DELTA_BYTES=0
-  # 200K tokens at 4.5 bytes/token = 900000 bytes (compact 이후 누적분만 측정)
-  CTX_PCT="$(python3 -c "print(int($DELTA_BYTES * 100 / 900000))" 2>/dev/null || echo 0)"
+  # 200K tokens at 37 bytes/token (JSONL overhead) = 7,400,000 bytes (compact 이후 누적분만 측정)
+  CTX_PCT="$(python3 -c "print(int($DELTA_BYTES * 100 / 7400000))" 2>/dev/null || echo 0)"
   # 100% 초과 클램핑
   [ "$CTX_PCT" -gt 100 ] 2>/dev/null && CTX_PCT=100
 else
