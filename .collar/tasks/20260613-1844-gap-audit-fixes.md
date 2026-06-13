@@ -27,12 +27,12 @@
 - [x] M10: collar-init --force 구현 (--force/-f 인자 파싱 + .bak 백업 후 덮어쓰기, E2E 검증)
 
 ## 체크리스트 — 미구현 기능
-- [ ] F19: watchdog 자동 compact+재시작 (config auto_restart + session-monitor)
+- [x] F19: watchdog auto_restart 현실 교정 (config auto_restart=false 전방호환 키 + 아키텍처 문서 ⚠️ 주의·동작흐름 정정 — 인터랙티브 세션 재시작 불가, autoCompactEnabled 인플레이스 압축으로 대체)
 - [x] F20: collar-github question LLM 답변 (answer_question, auto_level>=2 게이트)
 - [ ] F21: collar-init GitHub Actions collar.yml 생성
 - [ ] F23: collar migrate-gstack
 - [ ] F25: collar-learn (gstack learnings 자동 추출)
-- [ ] F45: 40-session-recovery.sh
+- [x] F45: 40-session-recovery.sh (SessionEnd→nohup collar-compact, .compact-lock 공유 쿨다운) + dispatcher Stop/SessionEnd 등록(collar-init+collar-watchdog, 멱등) + [DISCLOSED] 50-todo-enforcer 죽은 Stop 훅 부활 & grep -c "0\n0" 산술 크래시·COLLAR_DIR 견고화 수정
 - [ ] F46: collar-metrics
 
 ## 체크리스트 — LOW docs/dead-code

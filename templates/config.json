@@ -4,6 +4,7 @@
     "ctx_percent_target": 15,
     "message_threshold": 20,
     "auto_compact": true,
+    "auto_restart": false,
     "notify": true
   },
   "github": {

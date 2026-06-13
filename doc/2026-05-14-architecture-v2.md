@@ -64,27 +64,45 @@ project/.collar/             # 프로젝트별 런타임 데이터 (collar-init 
 ```json
 {
   "watchdog": {
-    "ctx_threshold": 40,        // ctx% 초과 시 compact
-    "message_threshold": 20,    // 메시지 수 초과 시 compact
-    "auto_restart": true        // compact 후 새 세션 자동 시작
+    "ctx_percent_threshold": 80,   // ctx% 초과 시 compact
+    "ctx_percent_target": 15,      // compact 목표 수준
+    "message_threshold": 20,       // transcript 없을 때 메시지 수 폴백
+    "auto_compact": true,          // 임계값 도달 시 collar-compact 자동 실행
+    "auto_restart": false,         // (전방호환) 외부 데몬/헤드리스 루프 전용 — 아래 주의 참고
+    "notify": true
   }
 }
 ```
 
-### 동작 흐름
+> ⚠️ **auto_restart 주의 (구현 현실):** 훅은 자신의 부모 인터랙티브 Claude Code 세션을
+> kill+respawn 할 수 없다. 따라서 "새 세션 자동 시작"은 **인터랙티브 세션에서 불가능**하다.
+> 대신 `autoCompactEnabled: true`(네이티브)로 **제자리(in-place) 압축 후 세션 연속**되므로
+> 재시작 자체가 불필요하다. `auto_restart`는 향후 독립 watchdog 데몬/헤드리스 `claude -p`
+> 루프에서만 의미가 있으며, 인터랙티브 세션에서는 무시된다.
+
+### 동작 흐름 (현재 구현 — 훅 기반)
 ```
-watchdog 실행 중
-  → ClaudeCode 세션 상태 polling (ctx%, 메시지 수)
-  → 임계값 초과 감지
-  → collar-compact 자동 실행
-  → session-compact.md 저장 확인
-  → ClaudeCode 새 세션 시작 (claude 명령 재실행)
-  → 사용자에게 알림만: "세션 재시작됨. 컨텍스트 복원 완료."
+session-monitor.sh (UserPromptSubmit/PostToolUse 훅)
+  → transcript JSONL 크기로 ctx% 추정 (compact 이후 delta 기준)
+  → 임계값(기본 80%) 초과 감지
+  → collar-compact 자동 실행 → session-compact.md 갱신
+  → transcript baseline 재설정 (다음 delta 기준점)
+  → autoCompactEnabled(네이티브)가 인플레이스 압축으로 세션 연속
+  → Claude에 알림: "ctx N% 초과. /compact 실행하라."
+세션 종료 시 (SessionEnd 1회성 이벤트):
+  → 40-session-recovery.sh → collar-compact 로 컨텍스트 보존
+    (SessionEnd 는 차단 불가 → nohup 백그라운드 fire-and-forget)
+  → 다음 세션 SessionStart 가 session-compact.md 자동 주입 → 복원 완료
+매 턴 종료 시 (Stop 이벤트):
+  → 50-todo-enforcer.sh → 미완료 TODO 가 남아있으면 계속 진행 권고
 ```
 
 ### 구현 방법
-- Claude Code hooks (PreToolUse/PostToolUse) → 메시지 카운터
-- 또는 독립 watchdog 데몬 (launchd on macOS)
+- **현재:** Claude Code hooks — UserPromptSubmit/PostToolUse(ctx% 감시) +
+  SessionEnd(종료 시 1회 컨텍스트 보존) + Stop(매 턴 미완료 TODO 권고).
+  인터랙티브 세션은 네이티브 `autoCompactEnabled`로 제자리 압축·연속(재시작 불필요).
+- **향후:** 독립 watchdog 데몬(launchd) 또는 헤드리스 `claude -p` 루프 —
+  이 경우에만 `auto_restart`로 실제 프로세스 재실행이 가능.
 
 ---
 

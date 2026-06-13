@@ -411,7 +411,9 @@ settings = {
     "PreToolUse":      [{"hooks": [{"type": "command", "command": f"bash '{dispatcher}'", "timeout": 10}]}],
     "UserPromptSubmit":[{"hooks": [{"type": "command", "command": f"bash '{dispatcher}'", "timeout": 60}]}],
     "SessionStart":    [{"hooks": [{"type": "command", "command": f"bash '{dispatcher}'", "timeout": 30}]}],
-    "PostToolUse":     [{"hooks": [{"type": "command", "command": f"bash '{dispatcher}'", "timeout": 60}]}]
+    "PostToolUse":     [{"hooks": [{"type": "command", "command": f"bash '{dispatcher}'", "timeout": 60}]}],
+    "Stop":            [{"hooks": [{"type": "command", "command": f"bash '{dispatcher}'", "timeout": 10}]}],
+    "SessionEnd":      [{"hooks": [{"type": "command", "command": f"bash '{dispatcher}'", "timeout": 10}]}]
   }
 }
 

@@ -17,22 +17,23 @@ except: print('')
 
 [ "$EVENT" = "Stop" ] || exit 0
 
-COLLAR_DIR="$(pwd)/.collar"
+# 형제 훅(40/60)과 동일하게 $0 기준으로 .collar 해석 (cwd 비의존, 더 견고)
+COLLAR_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 [ -d "$COLLAR_DIR" ] || exit 0
 
-# session-compact.md에서 미완료 항목 탐지
-COMPACT_FILE="$COLLAR_DIR/session-compact.md"
-TODO_COUNT=0
-if [ -f "$COMPACT_FILE" ]; then
-  TODO_COUNT=$(grep -c '^\- \[ \]' "$COMPACT_FILE" 2>/dev/null || echo 0)
-fi
+# 미완료 TODO 카운트 헬퍼
+#   주의: `grep -c`는 0매칭이어도 stdout에 "0"을 출력하고 exit 1을 반환한다.
+#   따라서 `|| echo 0`을 붙이면 "0\n0"이 되어 $(( )) 산술이 깨진다(에러 토큰 0).
+#   → grep 출력만 받고, 비정상 시에만 0으로 폴백 (echo 중복 금지).
+count_todo() {
+  local f="$1" n
+  [ -f "$f" ] || { printf 0; return; }
+  n="$(grep -c '^\- \[ \]' "$f" 2>/dev/null)"
+  printf '%s' "${n:-0}"
+}
 
-# memory.md에서도 확인
-MEMORY_FILE="$COLLAR_DIR/memory.md"
-if [ -f "$MEMORY_FILE" ]; then
-  MEM_TODO=$(grep -c '^\- \[ \]' "$MEMORY_FILE" 2>/dev/null || echo 0)
-  TODO_COUNT=$((TODO_COUNT + MEM_TODO))
-fi
+# session-compact.md + memory.md 에서 미완료 항목 탐지
+TODO_COUNT=$(( $(count_todo "$COLLAR_DIR/session-compact.md") + $(count_todo "$COLLAR_DIR/memory.md") ))
 
 if [ "$TODO_COUNT" -gt 0 ]; then
   echo "COLLAR_TODO_ENFORCER: 미완료 TODO ${TODO_COUNT}개 감지"

@@ -173,8 +173,10 @@ hook_entry = {
     }]
 }
 
-# UserPromptSubmit + PostToolUse 양쪽에 dispatcher 등록 (멱등성)
-for event in ("UserPromptSubmit", "PostToolUse"):
+# UserPromptSubmit + PostToolUse + Stop + SessionEnd 에 dispatcher 등록 (멱등성)
+#   Stop      : 매 턴 종료 → 50-todo-enforcer (미완료 TODO 권고)
+#   SessionEnd: 세션 종료 1회 → 40-session-recovery (컨텍스트 보존)
+for event in ("UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd"):
     if event not in d["hooks"]:
         d["hooks"][event] = []
     d["hooks"][event] = [
@@ -187,7 +189,7 @@ settings_path.write_text(json.dumps(d, indent=2, ensure_ascii=False))
 print("OK")
 PYEOF
 
-echo "✅ [Layer 1] settings.json에 dispatcher 등록 (UserPromptSubmit + PostToolUse)"
+echo "✅ [Layer 1] settings.json에 dispatcher 등록 (UserPromptSubmit + PostToolUse + Stop + SessionEnd)"
 echo ""
 
 # ── 설치 결과 출력 ────────────────────────────────────────────────
@@ -205,7 +207,7 @@ print(d.get('watchdog', {}).get('ctx_percent_target', 15))
 echo "🎉 collar-watchdog 이중 훅 설치 완료!"
 echo ""
 echo "구조:"
-echo "  Layer 1 (Native)  .claude/settings.json → UserPromptSubmit + PostToolUse"
+echo "  Layer 1 (Native)  .claude/settings.json → UserPromptSubmit + PostToolUse + Stop + SessionEnd"
 echo "            └─ collar-dispatcher.sh (훅 라우터)"
 echo "  Layer 2 (Collar)  .collar/hooks/"
 echo "            └─ session-monitor.sh (ctx 모니터링, 쿨다운 5분)"
