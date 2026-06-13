@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# collar-metrics — collar KPI 대시보드 (기존 산출물에서 지표 집계)
+#
+# doc/2026-05-20-eval-framework.md §1 의 KPI 를 실제 파일에서 읽어 출력한다.
+# 측정 소스(실재 경로):
+#   프로젝트:  .collar/{session-compact.md, memory.md, insights.jsonl, github-processed.log, config.json}
+#   설치 홈:   <COLLAR_HOME>/{eval-results/*.json, usage.log, model-routing.json}
+# 데이터가 없는 지표는 N/A 로 표기한다(없는 것을 지어내지 않는다).
+#
+# 사용법:
+#   collar-metrics            # 사람용 대시보드
+#   collar-metrics --json     # 기계용 JSON
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COLLAR_HOME="${COLLAR_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+PROJECT_DIR="$(pwd)"
+COLLAR_DIR="$PROJECT_DIR/.collar"
+
+JSON_OUT="false"
+[ "${1:-}" = "--json" ] && JSON_OUT="true"
+[ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ] && { grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0; }
+
+if [ ! -d "$COLLAR_DIR" ]; then
+  echo "❌ .collar 디렉토리가 없습니다. 먼저 collar-init 을 실행하세요." >&2
+  exit 1
+fi
+
+python3 - "$COLLAR_DIR" "$COLLAR_HOME" "$JSON_OUT" << 'PYEOF'
+import sys, json, os, pathlib, re
+
+collar_dir = pathlib.Path(sys.argv[1])
+collar_home = pathlib.Path(sys.argv[2])
+json_out = sys.argv[3] == "true"
+
+def read_lines(p):
+    try:
+        return [l for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+    except Exception:
+        return None  # None = 파일 없음/읽기 실패 → N/A
+
+m = {}
+
+# ── 세션 관리 ─────────────────────────────────────────────
+sc = collar_dir / "session-compact.md"
+m["session_restore_available"] = sc.exists()
+sc_date = None
+if sc.exists():
+    txt = sc.read_text(encoding="utf-8", errors="replace")
+    mt = re.search(r"DATE:\s*(\d{4}-\d{2}-\d{2})", txt)
+    if mt:
+        sc_date = mt.group(1)
+m["session_compact_date"] = sc_date
+
+mem = collar_dir / "memory.md"
+mem_lines = read_lines(mem)
+m["memory_patterns"] = (sum(1 for l in mem_lines if l.lstrip().startswith("### ["))
+                        if mem_lines is not None else None)
+
+ins = collar_dir / "insights.jsonl"
+ins_lines = read_lines(ins)
+m["insights_count"] = len(ins_lines) if ins_lines is not None else None
+# 인사이트 출처 분포
+ins_sources = {}
+if ins_lines:
+    for l in ins_lines:
+        try:
+            ins_sources[json.loads(l).get("source", "?")] = ins_sources.get(json.loads(l).get("source", "?"), 0) + 1
+        except json.JSONDecodeError:
+            pass
+m["insights_by_source"] = ins_sources or None
+
+# ── GitHub 자동화 ─────────────────────────────────────────
+gp = collar_dir / "github-processed.log"
+gp_lines = read_lines(gp)
+m["github_processed"] = len(gp_lines) if gp_lines is not None else None
+m["github_recent"] = gp_lines[-5:] if gp_lines else None
+
+# ── 모델 평가 ─────────────────────────────────────────────
+eval_dir = collar_home / "eval-results"
+eval_files = sorted(eval_dir.glob("*.json"), key=os.path.getmtime, reverse=True) if eval_dir.is_dir() else []
+m["eval_runs"] = len(eval_files)
+latest_eval = None
+if eval_files:
+    try:
+        d = json.loads(eval_files[0].read_text(encoding="utf-8"))
+        latest_eval = {"model": d.get("model"), "recommendation": d.get("recommendation")}
+    except Exception:
+        pass
+m["latest_eval"] = latest_eval
+
+routing = collar_home / "model-routing.json"
+m["routing"] = None
+if routing.exists():
+    try:
+        r = json.loads(routing.read_text(encoding="utf-8"))
+        m["routing"] = r
+    except Exception:
+        pass
+
+# ── 사용량(토큰/호출) ─────────────────────────────────────
+usage = collar_home / "usage.log"
+usage_lines = read_lines(usage)
+m["usage_calls"] = len(usage_lines) if usage_lines is not None else None
+prov = {}
+if usage_lines:
+    for l in usage_lines:
+        parts = l.split()
+        if len(parts) >= 2:
+            prov[parts[1]] = prov.get(parts[1], 0) + 1
+m["usage_by_provider"] = prov or None
+
+# ── 출력 ──────────────────────────────────────────────────
+if json_out:
+    print(json.dumps(m, ensure_ascii=False, indent=2))
+    sys.exit(0)
+
+def na(v):
+    return "N/A" if v is None else v
+
+print("")
+print("📊 collar 지표 대시보드")
+print("=" * 48)
+print("")
+print("── 세션 관리 ──")
+print(f"  세션 복원 가능       : {'예' if m['session_restore_available'] else 'N/A (compact 없음)'}")
+print(f"  마지막 compact 날짜  : {na(m['session_compact_date'])}")
+print(f"  memory 패턴 수       : {na(m['memory_patterns'])}")
+print(f"  구조화 인사이트 수   : {na(m['insights_count'])}")
+if m["insights_by_source"]:
+    dist = ", ".join(f"{k}:{v}" for k, v in m["insights_by_source"].items())
+    print(f"    └ 출처별          : {dist}")
+print("")
+print("── GitHub 자동화 ──")
+print(f"  처리한 이슈 건수     : {na(m['github_processed'])}")
+if m["github_recent"]:
+    print("  최근 처리:")
+    for line in m["github_recent"]:
+        print(f"    {line}")
+print("  (PR 병합율/review 통과율: GitHub API 필요 → 미집계)")
+print("")
+print("── 모델 평가 ──")
+print(f"  평가 실행 수         : {m['eval_runs']}")
+if m["latest_eval"]:
+    print(f"  최신 평가            : {m['latest_eval'].get('model')} → 추천 {m['latest_eval'].get('recommendation')}")
+if m["routing"]:
+    print("  현재 라우팅:")
+    for cat in ("simple", "standard", "complex"):
+        v = m["routing"].get(cat)
+        if isinstance(v, dict):
+            print(f"    {cat:9s}: {v.get('model', v)}")
+        elif v is not None:
+            print(f"    {cat:9s}: {v}")
+else:
+    print(f"  라우팅 설정          : {na(m['routing'])}")
+print("")
+print("── 사용량 ──")
+print(f"  LLM 호출 수          : {na(m['usage_calls'])}")
+if m["usage_by_provider"]:
+    dist = ", ".join(f"{k}:{v}" for k, v in m["usage_by_provider"].items())
+    print(f"    └ 프로바이더별     : {dist}")
+print("")
+print("=" * 48)
+print("ℹ️  N/A = 아직 데이터 없음 (해당 기능 미사용)")
+print("")
+PYEOF

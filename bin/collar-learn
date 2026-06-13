@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# collar-learn — 구조화된 인사이트를 .collar/insights.jsonl 에 기록 (gstack learnings 호환)
+#
+# collar-remember 가 사람 대상의 Markdown(memory.md)을 쓴다면,
+# collar-learn 은 기계 대상의 구조화 JSONL(insights.jsonl)을 쓴다.
+# 비대화형 — 훅/자동화가 호출할 수 있다. (doc/2026-05-14-memory-system-design.md §3.1/§3.4)
+#
+# 사용법:
+#   collar-learn "발견한 내용"
+#   collar-learn "발견" -t "제목" -c "맥락" -a "적용" -s observed -n 8
+#
+# 옵션:
+#   -t, --title       제목 (기본: 내용 앞 40자)
+#   -c, --context     맥락
+#   -a, --apply       적용 방법
+#   -s, --source      출처 (기본: observed) — gstack 호환 필드
+#   -n, --confidence  신뢰도 0-10 (기본: 5)
+#   -p, --project     프로젝트명 (기본: 현재 디렉토리명)
+
+set -euo pipefail
+
+TARGET="$(pwd)"
+TODAY="$(date +%Y-%m-%d)"
+
+if [ ! -d "$TARGET/.collar" ]; then
+  echo "❌ .collar 디렉토리가 없습니다. 먼저 collar-init 을 실행하세요." >&2
+  exit 1
+fi
+
+DISCOVERY=""
+TITLE=""
+CONTEXT=""
+APPLICATION=""
+SOURCE="observed"
+CONFIDENCE="5"
+PROJECT_NAME="$(basename "$TARGET")"
+
+# 인자 파싱 — 옵션이 아닌 첫 토큰을 discovery 로 취급
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -t|--title)       TITLE="${2:-}"; shift 2 ;;
+    -c|--context)     CONTEXT="${2:-}"; shift 2 ;;
+    -a|--apply)       APPLICATION="${2:-}"; shift 2 ;;
+    -s|--source)      SOURCE="${2:-observed}"; shift 2 ;;
+    -n|--confidence)  CONFIDENCE="${2:-5}"; shift 2 ;;
+    -p|--project)     PROJECT_NAME="${2:-$PROJECT_NAME}"; shift 2 ;;
+    -h|--help)
+      grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *)
+      if [ -z "$DISCOVERY" ]; then DISCOVERY="$1"; else DISCOVERY="$DISCOVERY $1"; fi
+      shift ;;
+  esac
+done
+
+if [ -z "$DISCOVERY" ]; then
+  echo "❌ 기록할 내용이 없습니다. 사용법: collar-learn \"발견한 내용\"" >&2
+  exit 1
+fi
+
+[ -z "$TITLE" ] && { TITLE="${DISCOVERY:0:40}"; [ ${#DISCOVERY} -gt 40 ] && TITLE="$TITLE..."; }
+
+INSIGHTS_FILE="$TARGET/.collar/insights.jsonl"
+
+# 구조화 기록 — json.dumps 로 안전 이스케이프, (title+discovery) 중복 시 멱등 스킵
+RESULT=$(python3 - "$INSIGHTS_FILE" "$TODAY" "$PROJECT_NAME" "$TITLE" "$DISCOVERY" \
+                   "$CONTEXT" "$APPLICATION" "$SOURCE" "$CONFIDENCE" << 'PYEOF'
+import sys, json, pathlib
+
+path, date, project, title, discovery, context, application, source, conf = sys.argv[1:10]
+try:
+    confidence = int(conf)
+except ValueError:
+    confidence = 5
+
+p = pathlib.Path(path)
+# 중복 검사 (title+discovery 동일 시 스킵)
+if p.exists():
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if d.get("title") == title and d.get("discovery") == discovery:
+            print("DUP")
+            sys.exit(0)
+
+record = {
+    "date": date,
+    "project": project,
+    "title": title,
+    "discovery": discovery,
+    "context": context,
+    "application": application,
+    "source": source,
+    "confidence": confidence,
+}
+with p.open("a", encoding="utf-8") as f:
+    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+print("OK")
+PYEOF
+)
+
+if [ "$RESULT" = "DUP" ]; then
+  echo "ℹ️  이미 기록된 인사이트 — 스킵 (insights.jsonl)"
+else
+  echo "✅ .collar/insights.jsonl 에 구조화 기록됨 (신뢰도 $CONFIDENCE/10, 출처 $SOURCE)"
+fi

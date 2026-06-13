@@ -18,6 +18,8 @@ if [ "${1:-}" = "--uninstall" ]; then
         "$INSTALL_DIR/bin/collar-watchdog" \
         "$INSTALL_DIR/bin/collar-compact" \
         "$INSTALL_DIR/bin/collar-remember" \
+        "$INSTALL_DIR/bin/collar-learn" \
+        "$INSTALL_DIR/bin/collar-migrate-gstack" \
         "$INSTALL_DIR/bin/collar-update" \
         "$INSTALL_DIR/bin/collar-github" \
         "$INSTALL_DIR/bin/collar-global" \
@@ -25,6 +27,8 @@ if [ "${1:-}" = "--uninstall" ]; then
         "$INSTALL_DIR/bin/collar-usage" \
         "$INSTALL_DIR/bin/collar-template-sync" \
         "$INSTALL_DIR/bin/collar-conductor" \
+        "$INSTALL_DIR/bin/collar-metrics" \
+        "$INSTALL_DIR/bin/collar-test" \
         "$INSTALL_DIR/bin/browser-test.py"
   rm -rf "$INSTALL_DIR/templates"
   echo "✅ bin/ 및 templates/ 제거 완료."

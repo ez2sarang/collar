@@ -134,7 +134,9 @@ flowchart LR
 | 이슈 복잡도 라우팅 | ✅ 완료 | `bin/collar-github` |
 | Hashline 무결성 | ✅ 완료 | `bin/collar-compact` |
 | 10-session-ctx.sh | ✅ 완료 | `templates/collar-hooks/` |
-| 50-todo-enforcer.sh | ✅ 완료 | `templates/collar-hooks/` |
+| 50-todo-enforcer.sh | ✅ 완료 (Stop 등록 + grep 산술 버그 수정) | `templates/collar-hooks/` |
+| 40-session-recovery.sh | ✅ 완료 (SessionEnd 1회 → nohup collar-compact) | `templates/collar-hooks/` |
+| collar-metrics CLI | ✅ 완료 (기존 산출물에서 KPI 집계, `--json` 지원) | `bin/collar-metrics` |
 | collar-eval-model | ✅ 완료 | `bin/collar-eval-model` |
 | 모델 철학 규칙 | ✅ 완료 | `templates/global/CLAUDE.md.rules` |
 
@@ -143,8 +145,6 @@ flowchart LR
 | 기능 | 설명 | 우선순위 |
 |------|------|---------|
 | eval-results 자동 라우팅 | eval 결과로 collar-github 모델 동적 선택 | 🔴 |
-| 40-session-recovery.sh | Stop 시 자동 compact + 재시작 | 🟡 |
-| collar-metrics CLI | KPI 대시보드 출력 | 🟢 |
 | 팀 모드 | 병렬 에이전트 (OMO Team Mode 개념) | 🟢 |
 
 ---

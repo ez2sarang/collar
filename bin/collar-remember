@@ -92,6 +92,36 @@ PYEOF
 
 echo ""
 echo "✅ .collar/memory.md에 기록됨"
+
+# ── 구조화 기록: .collar/insights.jsonl (gstack 호환, doc §3.4) ───────
+# memory.md(사람용 Markdown) 와 병행해 기계용 JSONL 도 남긴다.
+# json.dumps 로 안전 이스케이프, (title+discovery) 중복 시 멱등 스킵.
+INSIGHTS_FILE="$TARGET/.collar/insights.jsonl"
+python3 - "$INSIGHTS_FILE" "$TODAY" "$(basename "$TARGET")" "$TITLE" "$DISCOVERY" \
+           "$CONTEXT" "$APPLICATION" << 'PYEOF' || true
+import sys, json, pathlib
+path, date, project, title, discovery, context, application = sys.argv[1:8]
+p = pathlib.Path(path)
+if p.exists():
+    for line in p.read_text().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if d.get("title") == title and d.get("discovery") == discovery:
+            sys.exit(0)
+record = {
+    "date": date, "project": project, "title": title, "discovery": discovery,
+    "context": context, "application": application,
+    "source": "remember", "confidence": 5,
+}
+with p.open("a", encoding="utf-8") as f:
+    f.write(json.dumps(record, ensure_ascii=False) + "\n")
+PYEOF
+echo "✅ .collar/insights.jsonl 에 구조화 기록됨"
 echo ""
 
 # ── LLM 자동 판단: 글로벌 적용 가치 평가 ─────────────────────────────
