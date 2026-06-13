@@ -25,10 +25,10 @@ investments "Context low 얼마 안 썼는데 경고" 진단 → collar 통제 �
 - [x] 섹션4 모델 라우팅 슬림화
 - [x] 섹션5 Gemini/Design 슬림화
 - [x] ~/.collar/ref/ 로 배포 (cp) — 5개 파일
-- [~] Workflow 적대적 검증 (원본 .bak vs 슬림+ref, 누락 디렉티브 0 확인) — 실행 중
+- [x] Workflow 적대적 검증 (원본 .bak vs 슬림+ref, 누락 디렉티브 0 확인) — LOSSLESS 5/5, 누락 0
 - [x] setup.sh: ref 배포 1줄(install) + uninstall 대칭 제거
 - [x] 절감 측정: 1115→851줄, 50633→41351 bytes (9282/18.3%, ~2300토큰) + 모든 ## 제목 보존 확인
-- [ ] collar 레포 변경분 커밋
+- [x] collar 레포 변경분 커밋
 
 ## 구현 계획
 | # | 항목 | 방법 | 파일/위치 |
