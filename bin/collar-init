@@ -1,14 +1,23 @@
 #!/usr/bin/env bash
 # collar-init — 프로젝트에 하네스를 설치한다
-# 사용법: collar-init [프로젝트-폴더]
+# 사용법: collar-init [프로젝트-폴더] [--force]
+#   --force, -f : 기존 CLAUDE.md/AGENTS.md를 .bak으로 백업 후 덮어쓰기
 
 set -euo pipefail
 
 # 스크립트 위치 기준으로 COLLAR_HOME 자동 결정 (dev 레포 / ~/.collar 설치 모두 동작)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COLLAR_HOME="${COLLAR_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
-TARGET="${1:-.}"
-TARGET="$(cd "$TARGET" && pwd)"
+# 인자 파싱: 위치 인자(대상 폴더) + --force 플래그를 순서 무관하게 처리
+FORCE=false
+TARGET_ARG="."
+for _arg in "$@"; do
+  case "$_arg" in
+    --force|-f) FORCE=true ;;
+    *) TARGET_ARG="$_arg" ;;
+  esac
+done
+TARGET="$(cd "$TARGET_ARG" && pwd)"
 PROJECT_NAME="$(basename "$TARGET")"
 # DB 스키마명: 프로젝트명을 snake_case로 변환 (camelCase → snake, hyphen → underscore)
 DB_SCHEMA="$(echo "$PROJECT_NAME" \
@@ -346,10 +355,14 @@ PYEOF
 # ── CLAUDE.md 생성 ───────────────────────────────────────────────
 CLAUDE_OUT="$TARGET/CLAUDE.md"
 
-if [ -f "$CLAUDE_OUT" ]; then
+if [ -f "$CLAUDE_OUT" ] && [ "$FORCE" != "true" ]; then
   echo "⚠️  CLAUDE.md 이미 존재. 덮어쓰지 않음."
-  echo "   수동으로 병합하거나 --force 플래그 추가"
+  echo "   수동으로 병합하거나 --force 플래그로 재실행하세요."
 else
+  if [ -f "$CLAUDE_OUT" ]; then
+    cp "$CLAUDE_OUT" "$CLAUDE_OUT.bak"
+    echo "   ↩️  기존 CLAUDE.md → CLAUDE.md.bak 백업"
+  fi
   render_template "$COLLAR_HOME/templates/CLAUDE.md.base" "$CLAUDE_OUT"
   echo "✅ CLAUDE.md 생성: $CLAUDE_OUT"
 fi
@@ -357,9 +370,13 @@ fi
 # ── AGENTS.md 생성 ───────────────────────────────────────────────
 AGENTS_OUT="$TARGET/AGENTS.md"
 
-if [ -f "$AGENTS_OUT" ]; then
+if [ -f "$AGENTS_OUT" ] && [ "$FORCE" != "true" ]; then
   echo "⚠️  AGENTS.md 이미 존재. 건너뜀."
 else
+  if [ -f "$AGENTS_OUT" ]; then
+    cp "$AGENTS_OUT" "$AGENTS_OUT.bak"
+    echo "   ↩️  기존 AGENTS.md → AGENTS.md.bak 백업"
+  fi
   render_template "$COLLAR_HOME/templates/AGENTS.md.base" "$AGENTS_OUT"
   echo "✅ AGENTS.md 생성: $AGENTS_OUT"
 fi

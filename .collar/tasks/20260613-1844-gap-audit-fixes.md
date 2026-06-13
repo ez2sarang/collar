@@ -24,7 +24,7 @@
 - [x] M16: silent-fix/db-choice-guard 설치 경로 처리 (CLAUDE.md.base 문구 정직화)
 - [x] M17: browser-test.py CDP 수명 준수 재작성 + setup.sh uninstall 등록
 - [x] M18: global.ts Phase2 탐색 경로 환경변수화 (COLLAR_PROJECT_ROOTS)
-- [ ] M10: collar-init --force 구현
+- [x] M10: collar-init --force 구현 (--force/-f 인자 파싱 + .bak 백업 후 덮어쓰기, E2E 검증)
 
 ## 체크리스트 — 미구현 기능
 - [ ] F19: watchdog 자동 compact+재시작 (config auto_restart + session-monitor)
