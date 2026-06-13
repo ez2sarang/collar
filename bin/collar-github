@@ -121,11 +121,83 @@ p.write_text(json.dumps(d, indent=2, ensure_ascii=False))
     echo "✅ ANTHROPIC_API_KEY 환경변수 감지됨"
   fi
 
+  # .github/workflows/collar.yml 생성 (이슈 이벤트 → collar-github run)
+  write_collar_workflow
+
   echo ""
   echo "✅ collar-github 설정 완료: $REPO_SLUG (레벨 $AUTO_LEVEL)"
   echo ""
   echo "실행: collar-github run"
   echo "자동 감시 등록: collar-github watch"
+}
+
+# ── GitHub Actions 워크플로우 생성 ──────────────────────────────────
+# 이슈 이벤트마다 collar-github run 을 실행하는 워크플로우를 생성한다.
+# 멱등성: 이미 있으면 덮어쓰지 않는다(사용자 커스터마이즈 보존).
+write_collar_workflow() {
+  local wf_dir="$TARGET/.github/workflows"
+  local wf_file="$wf_dir/collar.yml"
+
+  if [ -f "$wf_file" ]; then
+    echo "ℹ️  .github/workflows/collar.yml 이미 존재 — 유지 (덮어쓰지 않음)"
+    return 0
+  fi
+
+  mkdir -p "$wf_dir"
+  # quoted heredoc: ${{ secrets }} 와 $RUNNER_TEMP 등이 생성 시점에 확장되지 않도록
+  cat > "$wf_file" << 'YML'
+name: collar — GitHub 이슈 자동 처리
+# collar-github setup 이 생성. 이슈 이벤트마다 collar-github run 을 실행한다.
+#
+# 활성화 조건 (둘 다 필요):
+#   1) 레포 Settings → Secrets → Actions 에 ANTHROPIC_API_KEY 추가
+#      (없으면 워크플로우는 자동 스킵 — 에러 아님)
+#   2) 아래 COLLAR_REPO 를 collar 소스 위치로 설정 (포크 시 변경)
+#
+# 보안 참고: 재현성을 높이려면 COLLAR_REPO clone 을 태그/SHA 로 고정하고
+#            actions/checkout 도 커밋 SHA 로 핀 고정하는 것을 권장.
+
+on:
+  issues:
+    types: [opened, reopened, edited, labeled]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  collar-github:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install collar
+        env:
+          COLLAR_REPO: https://github.com/ez2sarang/collar.git
+        run: |
+          git clone --depth 1 "$COLLAR_REPO" "$RUNNER_TEMP/collar-src"
+          bash "$RUNNER_TEMP/collar-src/setup.sh"
+          echo "$HOME/.collar/bin" >> "$GITHUB_PATH"
+
+      - name: Run collar-github
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY:-}" ]; then
+            echo "⏭  ANTHROPIC_API_KEY 시크릿 미설정 — collar-github 스킵"
+            exit 0
+          fi
+          collar-github run
+YML
+
+  echo "✅ .github/workflows/collar.yml 생성 (이슈 이벤트 → collar-github run)"
+  echo "   ⚠️  활성화: 레포 Secrets 에 ANTHROPIC_API_KEY 추가 필요"
 }
 
 # ── status ────────────────────────────────────────────────────────
