@@ -38,11 +38,23 @@ collar/
 │   ├── collar-compact     # 세션 컨텍스트 압축 → session-compact.md
 │   ├── collar-remember    # 세션 인사이트 기록 (LLM 글로벌 자동 판단)
 │   ├── collar-update      # CLAUDE.md TODO AI 자동 채우기
-│   └── collar-github      # GitHub 이슈 자동 분류·처리·PR 생성
+│   ├── collar-github      # GitHub 이슈 자동 분류·처리·PR 생성
+│   ├── collar-global      # 글로벌 규칙/메모리를 ~/.claude/CLAUDE.md에 병합
+│   ├── collar-eval-model  # 멀티 프로바이더 모델 평가 → simple/standard/complex 배치
+│   ├── collar-usage       # Claude Max / Gemini Pro 구독 사용량 요약
+│   ├── collar-template-sync # 글로벌 규칙-템플릿 갭 분석 + 자동 동기화
+│   ├── collar-conductor   # 관리·감독 오케스트레이터 (Executor→Verifier 루프)
+│   ├── collar-learn       # 구조화 인사이트 기록 → .collar/insights.jsonl (gstack 호환)
+│   ├── collar-migrate-gstack # gstack learnings.jsonl → .collar/insights.jsonl 이관
+│   ├── collar-metrics     # KPI 대시보드 — 기존 산출물에서 지표 집계 (--json)
+│   ├── collar-test        # collar 스크립트 스모크 테스트
+│   └── browser-test.py    # Patchright CDP 브라우저 스크린샷 도구
 ├── templates/
 │   ├── CLAUDE.md.base         # 모든 프로젝트 공통 헌법 템플릿
 │   ├── AGENTS.md.base         # 에이전트 가이드 템플릿
 │   ├── collar-dispatcher.sh   # 이중 훅 Layer 1 라우터
+│   ├── collar-hooks/          # 보안·모니터링 훅 모음 (10/20/30/40/50/60번)
+│   ├── global/                # 글로벌 규칙 + 메모리 템플릿
 │   ├── session-monitor.sh     # ctx% 감시 + memory.md 자동 정리
 │   ├── github-check.sh        # 세션 시작 시 GitHub 이슈 체크
 │   └── config.json            # 기본 설정 템플릿

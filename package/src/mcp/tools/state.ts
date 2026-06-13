@@ -7,10 +7,6 @@ function getStateDir(): string {
   return join(process.env['HOME'] ?? '', '.collar', 'state');
 }
 
-export function registerStateTools(): void {
-  // Tools are registered via the main server handler
-}
-
 export const stateToolDefs = [
   {
     name: 'collar_state_write',

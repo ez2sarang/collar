@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, copyFileSync, readdirSync } from 'fs';
+import { existsSync, mkdirSync, copyFileSync, readdirSync, cpSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import chalk from 'chalk';
@@ -22,11 +22,9 @@ export async function setup(): Promise<void> {
     for (const skillDir of skillDirs) {
       const src = join(PACKAGE_SKILLS_DIR, skillDir);
       const dest = join(COLLAR_SKILLS_DIR, skillDir);
-      mkdirSync(dest, { recursive: true });
-      const files = readdirSync(src);
-      for (const file of files) {
-        copyFileSync(join(src, file), join(dest, file));
-      }
+      // 재귀 복사: 스킬이 하위 디렉토리(assets/, references/ 등)를 가져도 안전.
+      // 기존 flat copyFileSync 루프는 하위 디렉토리에서 EISDIR로 크래시했다.
+      cpSync(src, dest, { recursive: true });
     }
     console.log(chalk.green('✅ ~/.collar/skills/ 설치'));
   } else {
