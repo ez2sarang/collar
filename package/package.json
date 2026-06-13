@@ -7,7 +7,7 @@
     "collar": "./dist/cli/index.js"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && node scripts/sync-templates.mjs",
     "dev": "tsc --watch",
     "prepublishOnly": "npm run build"
   },
@@ -29,6 +29,7 @@
   "files": [
     "dist/",
     "skills/",
-    "prompts/"
+    "prompts/",
+    "templates/"
   ]
 }

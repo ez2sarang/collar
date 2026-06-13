@@ -266,9 +266,14 @@ CONDUCTOR_NOTES:
                 print(f"\n⚠️  최대 라운드 {max_rounds} 초과 — 사용자 에스컬레이션 필요")
                 print(f"\n마지막 피드백:\n{notes}")
         else:
-            print(f"   ⚠️ 상태 파싱 실패 ({status}). APPROVED로 간주합니다.")
-            approved = True
-            break
+            # 파싱 실패(UNKNOWN)·빈 응답·rate limit을 APPROVED로 간주하면
+            # 검증 없이 작업이 완료 처리된다. 안전하게 NEEDS_WORK로 취급한다.
+            print(f"   ⚠️ 상태 파싱 실패 ({status}). 미검증 → NEEDS_WORK로 처리합니다.")
+            feedback = notes or "Verifier 응답을 파싱하지 못했습니다(빈 응답 또는 형식 불일치). CONDUCTOR_STATUS: 라인을 포함해 다시 검증하세요."
+            if round_num < max_rounds:
+                print(f"\n🔄 재검증 지시 → Round {round_num + 1} 시작")
+            else:
+                print(f"\n⚠️  최대 라운드 {max_rounds} 초과 — 검증 미합의, 사용자 에스컬레이션 필요")
 
     # ── 세션 종료 로그 ─────────────────────────────────────────────
     final = "APPROVED" if approved else f"ESCALATED (라운드 {last_round} 후 미합의)"

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, copyFileSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, copyFileSync, statSync } from 'fs';
 import { createHash } from 'crypto';
 import { join } from 'path';
 import chalk from 'chalk';
@@ -82,16 +82,27 @@ export async function globalCmd(options: GlobalOptions): Promise<void> {
   } else {
     const templateFiles = readdirSync(memoryTemplateDir).filter(f => f.endsWith('.md'));
 
-    // collar 관리 프로젝트 탐색 (find ~/Documents/dev -name ".collar" -type d)
+    // collar 관리 프로젝트 탐색.
+    // 스캔 루트는 COLLAR_PROJECT_ROOTS(콜론 구분)로 재정의 가능하며,
+    // 미설정 시 ~/Documents/dev 를 기본값으로 쓴다 (하드코딩 제거).
     const { execSync } = await import('child_process');
+    const home = process.env['HOME'] ?? '';
+    const scanRoots = (process.env['COLLAR_PROJECT_ROOTS'] ?? join(home, 'Documents', 'dev'))
+      .split(':').map(s => s.trim()).filter(Boolean);
     let collarProjects: string[] = [];
-    try {
-      const findOutput = execSync(
-        `find "${process.env['HOME'] ?? ''}/Documents/dev" -name ".collar" -type d 2>/dev/null`,
-        { encoding: 'utf-8' }
-      ).trim();
-      collarProjects = findOutput.split('\n').filter(Boolean).map(p => p.replace('/.collar', ''));
-    } catch { /* fallback: 현재 프로젝트만 */ }
+    for (const root of scanRoots) {
+      if (!existsSync(root)) continue;
+      try {
+        const findOutput = execSync(
+          `find "${root}" -name ".collar" -type d 2>/dev/null`,
+          { encoding: 'utf-8' }
+        ).trim();
+        for (const p of findOutput.split('\n').filter(Boolean)) {
+          const projectDir = p.replace('/.collar', '');
+          if (!collarProjects.includes(projectDir)) collarProjects.push(projectDir);
+        }
+      } catch { /* 이 루트는 건너뜀 */ }
+    }
 
     // 현재 프로젝트도 포함 (Documents/dev 밖에 있는 경우 대비)
     const currentProject = process.cwd();
@@ -179,17 +190,16 @@ function computeHash(dir: string): string {
   if (!existsSync(dir)) return '';
   try {
     const hash = createHash('md5');
+    // recursive readdirSync는 파일+디렉토리를 모두 반환한다.
+    // statSync().isFile()로 일반 파일만 골라야 해시가 안정적으로 계산된다.
+    // (기존 readFileSync 휴리스틱은 디렉토리에서 EISDIR을 던져 항상 '' 반환 → 버전 스킵 무력화)
     const files = readdirSync(dir, { recursive: true } as unknown as { recursive: boolean })
-      .filter(f => typeof f === 'string')
-      .map(f => join(dir, f as string))
-      .filter(f => existsSync(f) && !readFileSync(f, 'utf-8').includes('isDirectory'))
+      .filter((f): f is string => typeof f === 'string')
+      .map(f => join(dir, f))
+      .filter(f => { try { return statSync(f).isFile(); } catch { return false; } })
       .sort();
     for (const file of files) {
-      try {
-        hash.update(readFileSync(file));
-      } catch {
-        // skip directories
-      }
+      hash.update(readFileSync(file));
     }
     return hash.digest('hex');
   } catch { return ''; }

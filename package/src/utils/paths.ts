@@ -24,10 +24,12 @@ export const PACKAGE_SKILLS_DIR = join(PACKAGE_ROOT, 'skills');
 export const PACKAGE_PROMPTS_DIR = join(PACKAGE_ROOT, 'prompts');
 
 export function getTemplatesDir(): string {
-  // collar 레포 내 package/ 디렉토리의 상위에 templates/ 가 있음
-  const repoRoot = join(PACKAGE_ROOT, '..');
-  const templatesDir = join(repoRoot, 'templates');
-  if (existsSync(templatesDir)) return templatesDir;
-  // fallback: collar 레포를 찾을 수 없는 경우
+  // 1) npm 배포 패키지: build 시 templates/ 가 패키지 루트로 복사됨
+  const shipped = join(PACKAGE_ROOT, 'templates');
+  if (existsSync(shipped)) return shipped;
+  // 2) 개발(레포): package/ 의 상위에 templates/ 가 있음
+  const repoTemplates = join(PACKAGE_ROOT, '..', 'templates');
+  if (existsSync(repoTemplates)) return repoTemplates;
+  // 3) fallback: collar 레포를 찾을 수 없는 경우
   return join(COLLAR_HOME, 'templates');
 }

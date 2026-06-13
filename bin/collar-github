@@ -17,7 +17,10 @@
 
 set -euo pipefail
 
-COLLAR_HOME="${COLLAR_HOME:-$HOME/Documents/dev/ai/collar}"
+# COLLAR_HOME은 스크립트 위치 기준으로 동적 계산한다(다른 collar-* 스크립트와 동일).
+# 개발자 절대경로 하드코딩 시 ~/.collar 설치 환경·타 사용자 환경에서 templates 참조가 깨진다.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COLLAR_HOME="${COLLAR_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 TARGET="${COLLAR_GITHUB_TARGET:-$(pwd)}"
 COLLAR_DIR="$TARGET/.collar"
 CONFIG_FILE="$COLLAR_DIR/config.json"
@@ -212,6 +215,49 @@ def log_usage(provider: str, model: str, task: str, ms: int, status: str):
 def run(cmd, **kw):
     return subprocess.run(cmd, shell=True, capture_output=True, text=True, **kw)
 
+# ── shell 인젝션 차단용 안전 실행 헬퍼 ───────────────────────────────
+# 이슈 title/body/summary 등 외부 입력이 셸 문자열로 보간되면 인젝션이 된다.
+# gh/git 호출은 shell 없이 리스트 인자로 전달하고, 본문은 stdin(--body-file -)으로 넘긴다.
+def gh(args, **kw):
+    return subprocess.run(["gh", *args], capture_output=True, text=True, **kw)
+
+def gh_comment(num, body):
+    return subprocess.run(
+        ["gh", "issue", "comment", str(num), "--repo", repo, "--body-file", "-"],
+        input=body, capture_output=True, text=True)
+
+def git(args, cwd=None):
+    return subprocess.run(["git", *args], cwd=cwd or project_dir, capture_output=True, text=True)
+
+# ── 기본 브랜치 동적 감지 (main 하드코딩 제거, lazy + cache) ──────────
+_default_branch_cache = {}
+def default_branch():
+    if "v" not in _default_branch_cache:
+        r = git(["symbolic-ref", "refs/remotes/origin/HEAD"])
+        if r.returncode == 0 and r.stdout.strip():
+            _default_branch_cache["v"] = r.stdout.strip().rsplit("/", 1)[-1]
+        else:
+            r2 = gh(["repo", "view", repo, "--json", "defaultBranchRef",
+                     "-q", ".defaultBranchRef.name"])
+            if r2.returncode == 0 and r2.stdout.strip():
+                _default_branch_cache["v"] = r2.stdout.strip()
+            else:
+                _default_branch_cache["v"] = "main"
+    return _default_branch_cache["v"]
+
+def checkout_base():
+    if git(["checkout", default_branch()]).returncode != 0:
+        git(["checkout", "-"])
+
+# ── claude 바이너리 1회 탐색 (bug/feature/question 공용) ─────────────
+import glob as _glob2
+_claude_candidates = [
+    "/opt/homebrew/bin/claude",
+    "/usr/local/bin/claude",
+] + _glob2.glob(os.path.expanduser("~/.nvm/versions/node/*/bin/claude")) \
+  + _glob2.glob(os.path.expanduser("~/.local/share/fnm/node-versions/*/installation/bin/claude"))
+claude_bin = next((p for p in _claude_candidates if os.path.isfile(p)), None)
+
 def classify_issue(title, body, labels):
     label_names = [l.get("name","").lower() for l in labels]
     text = (title + " " + body).lower()
@@ -286,6 +332,223 @@ def load_routing():
 
 COMPLEXITY_MODEL = load_routing()
 
+def _parse_stream_field(stdout, prefix):
+    """claude stream-json 출력에서 'PREFIX:' 로 시작하는 라인의 값을 추출."""
+    val = None
+    for line in stdout.splitlines():
+        try:
+            obj = json.loads(line)
+            texts = []
+            if obj.get("type") == "result" and obj.get("subtype") == "success":
+                texts.append(obj.get("result", ""))
+            elif obj.get("type") == "assistant":
+                for block in obj.get("message", {}).get("content", []):
+                    if block.get("type") == "text":
+                        texts.append(block.get("text", ""))
+            for text in texts:
+                for tline in text.splitlines():
+                    if tline.startswith(prefix):
+                        val = tline.replace(prefix, "", 1).strip()
+        except Exception:
+            pass
+    return val
+
+
+def review_diff(num, title):
+    """변경된 diff를 review-agent(haiku)로 검토 → 한 줄 노트 반환."""
+    diff_full = git(["diff", "HEAD~1", "HEAD"]).stdout[:6000]
+    if not (diff_full and claude_bin):
+        return ""
+    review_prompt = (
+        f"You are a code reviewer. Review this git diff for issue #{num}.\n\n"
+        f"Issue: {title}\n\n"
+        f"Diff:\n{diff_full}\n\n"
+        f"Output exactly:\n"
+        f"REVIEW_STATUS: APPROVED | NEEDS_WORK\n"
+        f"REVIEW_NOTES: <one or two sentences — key risks or confirmation it looks correct>\n"
+        f"No other text."
+    )
+    try:
+        _t0 = time.time()
+        rev_r = subprocess.run(
+            [claude_bin, "--print", "-",
+             "--output-format", "stream-json", "--verbose",
+             "--dangerously-skip-permissions",
+             "--model", "claude-haiku-4-5-20251001",
+             "--max-turns", "1"],
+            input=review_prompt, capture_output=True, text=True, timeout=60,
+            cwd=project_dir,
+        )
+        log_usage("anthropic", "claude-haiku-4-5-20251001", "review",
+                  int((time.time()-_t0)*1000), "ok" if rev_r.returncode == 0 else "error")
+        status = _parse_stream_field(rev_r.stdout, "REVIEW_STATUS:") or "APPROVED"
+        notes = _parse_stream_field(rev_r.stdout, "REVIEW_NOTES:") or ""
+        print(f"       → 리뷰: {status} — {notes[:80]}")
+        return notes
+    except Exception as e:
+        return f"리뷰 실패: {e}"
+
+
+def implement_and_pr(kind, num, title, body, ts):
+    """bug/feature 공통: claude 구현 → 커밋 → 리뷰 → push → PR. 성공 시 PR URL, 실패 시 None."""
+    complexity = assess_complexity(title, body)
+    fix_model = COMPLEXITY_MODEL[complexity]
+    max_turns = {"simple": "10", "standard": "20", "complex": "30"}[complexity]
+    is_bug = kind == "bug"
+    prefix = "fix" if is_bug else "feat"
+    verb = "버그 자동 수정" if is_bug else "기능 자동 구현"
+
+    print(f"       → 복잡도: {complexity} → 모델: {fix_model}")
+    print(f"       → {verb} 시작...")
+    gh_comment(num, f"🤖 collar-github: {verb} 중입니다 (복잡도: {complexity}). 잠시 후 PR을 생성합니다.")
+
+    if not claude_bin:
+        print(f"       → claude 바이너리를 찾을 수 없습니다.")
+        gh_comment(num, "🤖 collar-github: 자동 처리 환경(claude CLI)을 찾지 못했습니다. 수동 검토 필요합니다.")
+        log_path.open("a").write(f"{ts} #{num} {kind}-no-claude: {title[:60]}\n")
+        return None
+
+    branch = f"collar/{prefix}-issue-{num}"
+    if git(["checkout", "-b", branch]).returncode != 0:
+        git(["checkout", branch])
+
+    if is_bug:
+        task_prompt = (
+            f"Fix GitHub issue #{num} in this project.\n\n"
+            f"Issue title: {title}\n"
+            f"Issue body:\n{body[:1000]}\n\n"
+            f"Instructions:\n"
+            f"1. Read relevant source files to understand the bug\n"
+            f"2. Make the minimal code changes needed to fix it\n"
+            f"3. After all edits, output exactly: FIX_SUMMARY: <one-line description>\n"
+        )
+    else:
+        task_prompt = (
+            f"Implement the feature requested in GitHub issue #{num}.\n\n"
+            f"Issue title: {title}\n"
+            f"Issue body:\n{body[:1500]}\n\n"
+            f"Instructions:\n"
+            f"1. Read relevant source files to understand the codebase conventions\n"
+            f"2. Implement the feature with minimal, focused changes that match existing style\n"
+            f"3. Do NOT install new dependencies or run any publish commands\n"
+            f"4. After all edits, output exactly: FIX_SUMMARY: <one-line description>\n"
+        )
+
+    summary = "CANNOT_FIX"
+    changed_files = []
+    try:
+        _t0 = time.time()
+        r = subprocess.run(
+            [claude_bin, "--print", "-",
+             "--output-format", "stream-json", "--verbose",
+             "--dangerously-skip-permissions",
+             "--model", fix_model,
+             "--max-turns", max_turns],
+            input=task_prompt, capture_output=True, text=True, timeout=600,
+            cwd=project_dir,
+        )
+        log_usage("anthropic", fix_model, f"{kind}-{complexity}",
+                  int((time.time()-_t0)*1000), "ok" if r.returncode == 0 else "error")
+        parsed = _parse_stream_field(r.stdout, "FIX_SUMMARY:")
+        if parsed:
+            summary = parsed
+        debug_log = log_path.parent / f"github-debug-{num}.txt"
+        debug_log.write_text(f"FIX_SUMMARY: {summary}\n\nSTDOUT:\n{r.stdout[:4000]}\nSTDERR:\n{r.stderr[:1000]}")
+        diff_r = git(["diff", "--name-only", "HEAD"])
+        changed_files = [f.strip() for f in diff_r.stdout.splitlines() if f.strip()]
+    except subprocess.TimeoutExpired:
+        summary = "CANNOT_FIX (timeout)"
+    except Exception as e:
+        summary = f"CANNOT_FIX (error: {e})"
+
+    if "CANNOT_FIX" in summary or not changed_files:
+        checkout_base()
+        git(["branch", "-D", branch])
+        gh_comment(num, f"🤖 collar-github: 자동 처리에 실패했습니다 — {summary}. 수동 검토 필요합니다.")
+        log_path.open("a").write(f"{ts} #{num} {kind}-failed: {title[:60]}\n")
+        print(f"       → 자동 처리 불가: {summary}")
+        return None
+
+    git(["add", "-A"])
+    git(["commit", "-m",
+         f"{prefix}: #{num} {title[:50]}\n\nAuto-{prefix} by collar-github\n\n{summary}"])
+
+    print(f"       → review-agent 실행 중...")
+    review_notes = review_diff(num, title)
+
+    push_r = git(["push", "-u", "origin", branch])
+    checkout_base()
+    if push_r.returncode != 0:
+        log_path.open("a").write(f"{ts} #{num} {kind}-push-failed: {title[:60]}\n")
+        print(f"       → push 실패: {push_r.stderr[:100]}")
+        return None
+
+    review_section = f"\n\n**🔍 review-agent:** {review_notes}" if review_notes else ""
+    pr_body = (
+        f"{'Fixes' if is_bug else 'Implements'} #{num}\n\n"
+        f"🤖 자동 생성 PR by collar-github\n\n"
+        f"**내용:** {summary}\n\n"
+        f"**변경 파일:** {', '.join(changed_files)}"
+        f"{review_section}"
+    )
+    pr_r = subprocess.run(
+        ["gh", "pr", "create", "--repo", repo, "--base", default_branch(),
+         "--head", branch, "--title", f"{prefix}: {title[:60]}", "--body-file", "-"],
+        input=pr_body, capture_output=True, text=True)
+    if pr_r.returncode == 0:
+        pr_url = pr_r.stdout.strip()
+        gh_comment(num, f"✅ {prefix} PR 생성: {pr_url}\n\n내용: {summary}")
+        log_path.open("a").write(f"{ts} #{num} {kind}-done PR={pr_url}: {title[:60]}\n")
+        print(f"       → PR 생성: {pr_url}")
+        return pr_url
+    log_path.open("a").write(f"{ts} #{num} {kind}-pr-failed: {title[:60]}\n")
+    print(f"       → PR 생성 실패 (branch pushed): {pr_r.stderr[:100]}")
+    return None
+
+
+def answer_question(num, title, body, ts):
+    """question: claude(haiku)로 답변 생성 → 이슈에 댓글. 실패 시 정적 댓글."""
+    fallback = "👋 collar-github: 질문으로 분류했습니다. 담당자가 확인 후 답변할 예정입니다."
+    if not claude_bin:
+        gh_comment(num, fallback)
+        print(f"       → 질문 댓글 등록 (claude 미설치)")
+        return
+    q_prompt = (
+        f"You are a helpful maintainer answering a GitHub issue question for this repository.\n"
+        f"Read the relevant project files if needed, then write a concise, accurate answer "
+        f"in the same language as the question.\n\n"
+        f"Question title: {title}\n"
+        f"Question body:\n{body[:1500]}\n\n"
+        f"Output exactly:\n"
+        f"ANSWER: <your answer, may span multiple lines>\n"
+    )
+    try:
+        _t0 = time.time()
+        r = subprocess.run(
+            [claude_bin, "--print", "-",
+             "--output-format", "stream-json", "--verbose",
+             "--dangerously-skip-permissions",
+             "--model", "claude-haiku-4-5-20251001",
+             "--max-turns", "5"],
+            input=q_prompt, capture_output=True, text=True, timeout=180,
+            cwd=project_dir,
+        )
+        log_usage("anthropic", "claude-haiku-4-5-20251001", "question",
+                  int((time.time()-_t0)*1000), "ok" if r.returncode == 0 else "error")
+        answer = _parse_stream_field(r.stdout, "ANSWER:")
+        if answer:
+            gh_comment(num,
+                       f"🤖 collar-github 자동 답변:\n\n{answer}\n\n---\n"
+                       f"_AI가 생성한 답변입니다. 정확하지 않을 수 있으니 담당자 확인을 권장합니다._")
+            print(f"       → 질문 자동 답변 등록")
+        else:
+            gh_comment(num, fallback)
+            print(f"       → 답변 생성 실패, 분류 댓글만 등록")
+    except Exception:
+        gh_comment(num, fallback)
+        print(f"       → 답변 처리 오류, 분류 댓글만 등록")
+
+
 for issue in issues:
     num   = str(issue["number"])
     title = issue["title"]
@@ -307,211 +570,36 @@ for issue in issues:
         log_path.open("a").write(f"{ts} #{num} skip: {title[:60]}\n")
         continue
 
-    # ── 라벨 자동 적용 ──────────────────────────────────────────
+    # ── 라벨 자동 적용 (shell 없이 인자 전달) ──────────────────────
     label_map = {"bug": "bug", "feature": "enhancement", "question": "question"}
-    run(f'gh issue edit {num} --repo {repo} --add-label "{label_map[kind]}" 2>/dev/null')
+    gh(["issue", "edit", num, "--repo", repo, "--add-label", label_map[kind]])
 
-    # ── 분류 댓글 ────────────────────────────────────────────────
     if kind == "question":
-        comment = f"👋 collar-github: 질문으로 분류했습니다. 담당자가 확인 후 답변할 예정입니다."
-        run(f'gh issue comment {num} --repo {repo} --body "{comment}"')
+        if auto_level >= 2:
+            answer_question(num, title, body, ts)
+        else:
+            gh_comment(num, "👋 collar-github: 질문으로 분류했습니다. 담당자가 확인 후 답변할 예정입니다.")
+            print(f"       → 질문 댓글 등록")
         log_path.open("a").write(f"{ts} #{num} question: {title[:60]}\n")
-        print(f"       → 질문 댓글 등록")
         continue
 
     if kind == "bug" and auto_level >= 2:
-        # ── bug: 복잡도 평가 → 모델 선택 → PR ────────
-        complexity = assess_complexity(title, body)
-        fix_model = COMPLEXITY_MODEL[complexity]
-        max_turns = {"simple": "10", "standard": "20", "complex": "30"}[complexity]
-
-        print(f"       → 복잡도: {complexity} → 모델: {fix_model}")
-        print(f"       → 버그 분석 시작...")
-        run(f'gh issue comment {num} --repo {repo} --body "🤖 collar-github: 버그 자동 수정 중입니다 (복잡도: {complexity}). 잠시 후 PR을 생성합니다."')
-
-        import glob as _glob2
-
-        candidates = [
-            "/opt/homebrew/bin/claude",
-            "/usr/local/bin/claude",
-        ] + _glob2.glob(os.path.expanduser("~/.nvm/versions/node/*/bin/claude")) \
-          + _glob2.glob(os.path.expanduser("~/.local/share/fnm/node-versions/*/installation/bin/claude"))
-        claude_bin = next((p for p in candidates if os.path.isfile(p)), None)
-
-        summary = "CANNOT_FIX"
-        changed_files = []
-
-        if not claude_bin:
-            print(f"       → claude 바이너리를 찾을 수 없습니다.")
-        else:
-            branch = f"collar/fix-issue-{num}"
-            run(f'cd "{project_dir}" && git checkout -b {branch} 2>/dev/null || git checkout {branch}')
-
-            fix_prompt = (
-                f"Fix GitHub issue #{num} in this project.\n\n"
-                f"Issue title: {title}\n"
-                f"Issue body:\n{body[:1000]}\n\n"
-                f"Instructions:\n"
-                f"1. Read relevant source files to understand the bug\n"
-                f"2. Make the minimal code changes needed to fix it\n"
-                f"3. After all edits, output exactly: FIX_SUMMARY: <one-line description>\n"
-            )
-
-            try:
-                _t0 = time.time()
-                r = subprocess.run(
-                    [claude_bin, "--print", "-",
-                     "--output-format", "stream-json",
-                     "--verbose",
-                     "--dangerously-skip-permissions",
-                     "--model", fix_model,
-                     "--max-turns", max_turns],
-                    input=fix_prompt,
-                    capture_output=True, text=True, timeout=600,
-                    cwd=project_dir
-                )
-                log_usage("anthropic", fix_model, f"fix-{complexity}", int((time.time()-_t0)*1000), "ok" if r.returncode == 0 else "error")
-
-                # parse stream-json: find FIX_SUMMARY in assistant text or result
-                for line in r.stdout.splitlines():
-                    try:
-                        obj = json.loads(line)
-                        if obj.get("type") == "result" and obj.get("subtype") == "success":
-                            result_text = obj.get("result", "")
-                            for tline in result_text.splitlines():
-                                if tline.startswith("FIX_SUMMARY:"):
-                                    summary = tline.replace("FIX_SUMMARY:", "").strip()
-                        elif obj.get("type") == "assistant":
-                            for block in obj.get("message", {}).get("content", []):
-                                if block.get("type") == "text":
-                                    for tline in block.get("text", "").splitlines():
-                                        if tline.startswith("FIX_SUMMARY:"):
-                                            summary = tline.replace("FIX_SUMMARY:", "").strip()
-                    except Exception:
-                        pass
-
-                # debug log
-                debug_log = log_path.parent / f"github-debug-{num}.txt"
-                debug_log.write_text(f"FIX_SUMMARY: {summary}\n\nSTDOUT:\n{r.stdout[:4000]}\nSTDERR:\n{r.stderr[:1000]}")
-
-                # detect changed files via git
-                diff_r = subprocess.run(
-                    ["git", "diff", "--name-only", "HEAD"],
-                    capture_output=True, text=True, cwd=project_dir
-                )
-                changed_files = [f.strip() for f in diff_r.stdout.splitlines() if f.strip()]
-
-            except subprocess.TimeoutExpired:
-                summary = "CANNOT_FIX (timeout)"
-            except Exception as e:
-                summary = f"CANNOT_FIX (error: {e})"
-
-        if "CANNOT_FIX" in summary or not changed_files:
-            # rollback branch if nothing changed
-            run(f'cd "{project_dir}" && git checkout main 2>/dev/null || git checkout - 2>/dev/null')
-            if claude_bin:
-                run(f'cd "{project_dir}" && git branch -D {branch} 2>/dev/null')
-            run(f'gh issue comment {num} --repo {repo} --body "🤖 collar-github: 자동 수정에 실패했습니다 — {summary}. 수동 검토 필요합니다."')
-            log_path.open("a").write(f"{ts} #{num} bug-fix-failed: {title[:60]}\n")
-            print(f"       → 자동 수정 불가: {summary}")
-        else:
-            run(f'cd "{project_dir}" && git add -A && git commit -m "fix: #{num} {title[:50]}\n\nAuto-fix by collar-github\n\n{summary}"')
-
-            # ── review-agent (Sonnet): 변경 코드 검토 ─────────────
-            print(f"       → review-agent 실행 중...")
-            review_notes = ""
-            diff_full = subprocess.run(
-                ["git", "diff", "HEAD~1", "HEAD"],
-                capture_output=True, text=True, cwd=project_dir
-            ).stdout[:6000]
-
-            if diff_full and claude_bin:
-                review_prompt = (
-                    f"You are a code reviewer. Review this git diff for issue #{num} fix.\n\n"
-                    f"Issue: {title}\n\n"
-                    f"Diff:\n{diff_full}\n\n"
-                    f"Output exactly:\n"
-                    f"REVIEW_STATUS: APPROVED | NEEDS_WORK\n"
-                    f"REVIEW_NOTES: <one or two sentences — key risks or confirmation it looks correct>\n"
-                    f"No other text."
-                )
-                try:
-                    _t0_rev = time.time()
-                    rev_r = subprocess.run(
-                        [claude_bin, "--print", "-",
-                         "--output-format", "stream-json",
-                         "--verbose",
-                         "--dangerously-skip-permissions",
-                         "--model", "claude-haiku-4-5-20251001",
-                         "--max-turns", "1"],
-                        input=review_prompt,
-                        capture_output=True, text=True, timeout=60,
-                        cwd=project_dir
-                    )
-                    log_usage("anthropic", "claude-haiku-4-5-20251001", "review", int((time.time()-_t0_rev)*1000), "ok" if rev_r.returncode == 0 else "error")
-                    review_status = "APPROVED"
-                    for line in rev_r.stdout.splitlines():
-                        try:
-                            obj = json.loads(line)
-                            text = ""
-                            if obj.get("type") == "result":
-                                text = obj.get("result", "")
-                            elif obj.get("type") == "assistant":
-                                for blk in obj.get("message", {}).get("content", []):
-                                    if blk.get("type") == "text":
-                                        text = blk.get("text", "")
-                            for tline in text.splitlines():
-                                if tline.startswith("REVIEW_STATUS:"):
-                                    review_status = tline.replace("REVIEW_STATUS:", "").strip()
-                                if tline.startswith("REVIEW_NOTES:"):
-                                    review_notes = tline.replace("REVIEW_NOTES:", "").strip()
-                        except Exception:
-                            pass
-                    print(f"       → 리뷰: {review_status} — {review_notes[:80]}")
-                except Exception as e:
-                    review_notes = f"리뷰 실패: {e}"
-                    review_status = "APPROVED"
-
-            push_r = run(f'cd "{project_dir}" && git push -u origin {branch}')
-            run(f'cd "{project_dir}" && git checkout main 2>/dev/null || git checkout - 2>/dev/null')
-
-            if push_r.returncode == 0:
-                review_section = f"\n\n**🔍 review-agent:** {review_notes}" if review_notes else ""
-                pr_body = (
-                    f"Fixes #{num}\n\n"
-                    f"🤖 자동 생성 PR by collar-github\n\n"
-                    f"**수정 내용:** {summary}\n\n"
-                    f"**변경 파일:** {', '.join(changed_files)}"
-                    f"{review_section}"
-                )
-                pr_r = run(f'gh pr create --repo {repo} --base main --head {branch} --title "fix: {title[:60]}" --body "{pr_body}"')
-                if pr_r.returncode == 0:
-                    pr_url = pr_r.stdout.strip()
-                    run(f'gh issue comment {num} --repo {repo} --body "✅ 수정 PR 생성: {pr_url}\n\n수정 내용: {summary}"')
-                    log_path.open("a").write(f"{ts} #{num} bug-fixed PR={pr_url}: {title[:60]}\n")
-                    print(f"       → PR 생성: {pr_url}")
-                else:
-                    log_path.open("a").write(f"{ts} #{num} bug-pr-failed: {title[:60]}\n")
-                    print(f"       → PR 생성 실패 (branch pushed): {pr_r.stderr[:100]}")
-            else:
-                log_path.open("a").write(f"{ts} #{num} bug-push-failed: {title[:60]}\n")
-                print(f"       → push 실패: {push_r.stderr[:100]}")
-
+        implement_and_pr("bug", num, title, body, ts)
     elif kind == "feature" and auto_level >= 3:
-        # ── feature: 로드맵 기록 ────────────────────────────────
+        implement_and_pr("feature", num, title, body, ts)
+    elif kind == "feature":
+        # auto_level < 3 → 자동 구현 대신 로드맵 기록
         roadmap = pathlib.Path(project_dir) / ".collar" / "roadmap.md"
+        roadmap.parent.mkdir(parents=True, exist_ok=True)
         with roadmap.open("a") as f:
             f.write(f"\n- [ ] #{num}: {title} (자동 추가 {ts})\n")
-        comment = f"📝 collar-github: 기능 요청이 로드맵에 추가됐습니다."
-        run(f'gh issue comment {num} --repo {repo} --body "{comment}"')
+        gh_comment(num, "📝 collar-github: 기능 요청이 로드맵에 추가됐습니다 (자동 구현은 auto_level 3 이상에서 동작).")
         log_path.open("a").write(f"{ts} #{num} feature-roadmap: {title[:60]}\n")
         print(f"       → 로드맵 기록")
-
     else:
-        # auto_level 미달 → 분류 댓글만
-        level_note = {"bug":"버그 자동수정이 비활성화됨 (auto_level<2)", "feature":"기능개발 자동화가 비활성화됨 (auto_level<3)"}.get(kind,"")
-        comment = f"🏷️ collar-github: `{kind}`로 분류했습니다. {level_note}"
-        run(f'gh issue comment {num} --repo {repo} --body "{comment}"')
+        # bug인데 auto_level < 2 → 라벨 + 분류 댓글만
+        comment = "🏷️ collar-github: `bug`로 분류했습니다. 버그 자동수정이 비활성화됨 (auto_level<2)"
+        gh_comment(num, comment)
         log_path.open("a").write(f"{ts} #{num} {kind}-labeled: {title[:60]}\n")
         print(f"       → 라벨 + 댓글 등록")
 

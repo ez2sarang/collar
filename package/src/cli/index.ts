@@ -13,7 +13,11 @@ program.command('setup').description('Install collar globally (MCP + hooks regis
 program.command('init [path]').description('Initialize collar in a project').action(init);
 program.command('doctor').description('Verify collar installation').action(doctor);
 program.command('update').description('Update collar and re-run setup').action(update);
-program.command('global').option('--force', 'Force re-apply').description('Apply global rules to all projects').action(globalCmd);
+program.command('global')
+  .option('--force', 'Force re-apply')
+  .option('--dry-run', 'Preview changes without writing')
+  .description('Apply global rules to all projects')
+  .action(globalCmd);
 program.command('mcp-serve').description('Start MCP server (stdio)').action(mcpServe);
 
 program.parse();

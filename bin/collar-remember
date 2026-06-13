@@ -99,8 +99,9 @@ GLOBAL_MEMORY="$HOME/.claude/collar-memory"
 CLAUDE_BIN="${CLAUDE_PATH:-/opt/homebrew/bin/claude}"
 
 LLM_JUDGE=""
-if command -v claude >/dev/null 2>&1 || [ -x "$CLAUDE_BIN" ]; then
-  JUDGE_PROMPT="다음 인사이트가 특정 프로젝트에만 해당하는지, 모든 프로젝트에 적용 가능한 범용 패턴인지 판단해라.
+# JUDGE_PROMPT는 claude/gemini 양쪽 분기에서 참조되므로 set -u 환경에서
+# claude 미설치 시 unbound variable 오류를 막기 위해 먼저 정의한다.
+JUDGE_PROMPT="다음 인사이트가 특정 프로젝트에만 해당하는지, 모든 프로젝트에 적용 가능한 범용 패턴인지 판단해라.
 제목: $TITLE
 발견: $DISCOVERY
 맥락: $CONTEXT
@@ -109,6 +110,7 @@ if command -v claude >/dev/null 2>&1 || [ -x "$CLAUDE_BIN" ]; then
 JSON으로만 응답 (다른 텍스트 없이):
 {\"global\": true/false, \"confidence\": 0-10, \"reason\": \"이유를 한 줄로\"}"
 
+if command -v claude >/dev/null 2>&1 || [ -x "$CLAUDE_BIN" ]; then
   LLM_JUDGE="$("$CLAUDE_BIN" -p "$JUDGE_PROMPT" 2>/dev/null)" || LLM_JUDGE=""
 fi
 
