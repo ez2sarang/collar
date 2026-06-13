@@ -31,7 +31,8 @@ if [ "${1:-}" = "--uninstall" ]; then
         "$INSTALL_DIR/bin/collar-test" \
         "$INSTALL_DIR/bin/browser-test.py"
   rm -rf "$INSTALL_DIR/templates"
-  echo "✅ bin/ 및 templates/ 제거 완료."
+  rm -rf "$INSTALL_DIR/ref"
+  echo "✅ bin/, templates/, ref/ 제거 완료."
   echo "   ~/.collar/ 디렉토리 자체는 유지됩니다 (프로젝트 데이터 보호)."
   exit 0
 fi
@@ -52,6 +53,11 @@ echo "✅ bin/ 설치 완료 ($(ls "$SCRIPT_DIR/bin/" | wc -l | tr -d ' ')개 �
 # templates/ 복사 (서브디렉토리 포함)
 cp -r "$SCRIPT_DIR/templates/"* "$INSTALL_DIR/templates/"
 echo "✅ templates/ 설치 완료"
+
+# ref/ 복사 (글로벌 CLAUDE.md 포인터가 가리키는 ~/.collar/ref/ 상세 레퍼런스)
+mkdir -p "$INSTALL_DIR/ref"
+cp -f "$SCRIPT_DIR/templates/global/ref/"*.md "$INSTALL_DIR/ref/" 2>/dev/null || true
+echo "✅ ref/ 설치 완료 ($(ls "$SCRIPT_DIR/templates/global/ref/"*.md 2>/dev/null | wc -l | tr -d ' ')개 레퍼런스)"
 
 # package/prompts/ 복사 (collar-conductor 에이전트 프롬프트)
 mkdir -p "$INSTALL_DIR/package/prompts"
