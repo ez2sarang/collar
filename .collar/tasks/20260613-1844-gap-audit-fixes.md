@@ -16,13 +16,13 @@
 - [x] H9: collar-github feature 파이프라인 구현 (implement_and_pr 공용 함수)
 
 ## 체크리스트 — MEDIUM 코드버그·drift
-- [ ] M11: collar-eval-model COLLAR_HOME SCRIPT_DIR 통일
+- [x] M11: collar-eval-model COLLAR_HOME SCRIPT_DIR 통일 + collar-github:318 model-routing.json 경로 통일
 - [x] M12: collar-github 기본 브랜치 동적 감지 (default_branch() lazy+cache)
-- [ ] M13: collar-template-sync git repo guard
-- [ ] M14: collar-init DOMAIN_TABLE 치환 또는 제거
-- [ ] M15: templates/session-monitor.sh divisor 7400000 동기화
-- [ ] M16: silent-fix/db-choice-guard 설치 경로 처리
-- [ ] M17: browser-test.py 처리 (문서 또는 스크립트)
+- [x] M13: collar-template-sync git repo guard
+- [x] M14: collar-init DOMAIN_TABLE 치환 (멀티로우 렌더 검증) + 잘못된 에이전트명(frontend/backend/database) 교정
+- [x] M15: templates/session-monitor.sh divisor 7400000 동기화 [DISCLOSED — 7891b89 반쪽수정 완료]
+- [x] M16: silent-fix/db-choice-guard 설치 경로 처리 (CLAUDE.md.base 문구 정직화)
+- [x] M17: browser-test.py CDP 수명 준수 재작성 + setup.sh uninstall 등록
 - [x] M18: global.ts Phase2 탐색 경로 환경변수화 (COLLAR_PROJECT_ROOTS)
 - [ ] M10: collar-init --force 구현
 
@@ -48,3 +48,5 @@
 
 ## 진행 로그
 - [18:44] 감사 완료, 보고, 추적 문서 생성
+- [HIGH] H1~H9 + F20/M12/M18 커밋 완료 (0d2c664)
+- [MEDIUM] M11/M13/M14/M15/M16/M17 구현 + 검증 (bash -n, ast.parse, render 스모크 테스트) — 커밋 대기

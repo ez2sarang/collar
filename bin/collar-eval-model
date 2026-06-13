@@ -24,7 +24,11 @@
 
 set -euo pipefail
 
-COLLAR_HOME="${COLLAR_HOME:-$HOME/.collar}"
+# COLLAR_HOME은 스크립트 위치 기준으로 동적 계산한다(collar-github/collar-template-sync와 동일).
+# 레포 bin/에서 실행하면 레포 루트, ~/.collar/bin/에서 실행하면 ~/.collar.
+# 이렇게 해야 usage.log / model-routing.json / eval-results가 한 곳에 모인다.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+COLLAR_HOME="${COLLAR_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 EVAL_DIR="$COLLAR_HOME/eval-results"
 JUDGE_MODEL="gemini-2.5-flash-lite"
 JUDGE_PROVIDER="gemini"   # gemini | haiku — --judge 플래그로 변경 가능
@@ -748,7 +752,7 @@ collar-eval-model — LLM 모델 카테고리 적합도 평가 (멀티 프로바
   COMPLEX  — 아키텍처 설계 (품질 85% + 속도 15%)
   FORMAT   — 지시 형식 준수
 
-결과 저장: ~/.collar/eval-results/<model>_<date>.json
+결과 저장: <COLLAR_HOME>/eval-results/<model>_<date>.json  (설치 시 ~/.collar, 레포 실행 시 레포 루트)
 
 예시:
   collar-eval-model claude-haiku-4-5-20251001

@@ -217,7 +217,10 @@ if [ "$CHANGED" = "true" ] && [ "$DRY_RUN" = "false" ]; then
   echo ""
   echo "━━━ 변경 커밋 ━━━"
   cd "$COLLAR_HOME"
-  if git diff --quiet && git diff --cached --quiet; then
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    # 설치본(~/.collar)은 git 레포가 아닐 수 있음 → 커밋 건너뛰고 파일만 갱신
+    echo "   ⏭️  $COLLAR_HOME 는 git 레포가 아님 — 커밋 건너뜀 (파일은 갱신됨)"
+  elif git diff --quiet && git diff --cached --quiet; then
     # 작업 디렉토리가 collar 레포가 아닐 수 있으므로 git add 대상 명시
     echo "   변경 사항 없음 (이미 커밋됨)"
   else

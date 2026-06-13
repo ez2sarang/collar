@@ -58,7 +58,7 @@
 발견 → 작업 멈춤 → 사용자에게 보고 (내용/원인/영향/제안) → 확인 후 수정 → [DISCLOSED] 커밋
 ```
 
-보고 없이 수정 먼저 하는 것은 금지. `~/.claude/hooks/silent-fix-guard.sh`가 차단한다.
+보고 없이 수정 먼저 하는 것은 금지. (전역 훅 `~/.claude/hooks/silent-fix-guard.sh`가 설치돼 있으면 [DISCLOSED] 없는 fix 커밋을 자동 차단)
 
 ---
 
@@ -66,7 +66,7 @@
 
 | 도메인 | 에이전트 | 모델 |
 |--------|----------|------|
-| {{DOMAIN_1}} | {{AGENT_1}} | sonnet |
+{{DOMAIN_TABLE}}
 | 아키텍처/다중 도메인 | architect | sonnet (복잡시 opus) |
 | 보안/인증 | security-reviewer | opus |
 | 파일 검색 | explore | haiku |
@@ -112,7 +112,7 @@
 - "가볍고 편해서" DuckDB/SQLite 자의적 선택 ❌
 - DB 파일 먼저 만들고 나중에 보고 ❌
 
-**`~/.claude/hooks/db-choice-guard.sh` 훅이 미명시 DB 사용 시 자동 차단한다.**
+**(전역 훅 `~/.claude/hooks/db-choice-guard.sh`가 설치돼 있으면 미명시 DB 사용 시 자동 차단)**
 
 ---
 

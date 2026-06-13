@@ -315,7 +315,8 @@ def assess_complexity(title, body):
 import pathlib
 
 def load_routing():
-    routing_file = pathlib.Path.home() / ".collar" / "model-routing.json"
+    # collar_home(sys.argv[6]) 기준 — collar-eval-model이 쓰는 위치와 동일하게 맞춘다.
+    routing_file = pathlib.Path(collar_home) / "model-routing.json"
     fallback = {
         "simple":   "claude-haiku-4-5-20251001",
         "standard": "claude-sonnet-4-6",

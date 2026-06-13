@@ -24,7 +24,8 @@ if [ "${1:-}" = "--uninstall" ]; then
         "$INSTALL_DIR/bin/collar-eval-model" \
         "$INSTALL_DIR/bin/collar-usage" \
         "$INSTALL_DIR/bin/collar-template-sync" \
-        "$INSTALL_DIR/bin/collar-conductor"
+        "$INSTALL_DIR/bin/collar-conductor" \
+        "$INSTALL_DIR/bin/browser-test.py"
   rm -rf "$INSTALL_DIR/templates"
   echo "✅ bin/ 및 templates/ 제거 완료."
   echo "   ~/.collar/ 디렉토리 자체는 유지됩니다 (프로젝트 데이터 보호)."
