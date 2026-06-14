@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # collar-init — 프로젝트에 하네스를 설치한다
-# 사용법: collar-init [프로젝트-폴더] [--force]
-#   --force, -f : 기존 CLAUDE.md/AGENTS.md를 .bak으로 백업 후 덮어쓰기
+# 사용법: collar-init [프로젝트-폴더] [--force] [--update-hooks]
+#   --force, -f      : 기존 CLAUDE.md/AGENTS.md를 .bak으로 백업 후 덮어쓰기
+#   --update-hooks   : 기존 .collar/hooks/*.sh를 .bak으로 백업 후 템플릿 기준 덮어쓰기(업데이트)
 
 set -euo pipefail
 
@@ -10,15 +11,50 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COLLAR_HOME="${COLLAR_HOME:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 # 인자 파싱: 위치 인자(대상 폴더) + --force 플래그를 순서 무관하게 처리
 FORCE=false
+UPDATE_HOOKS=false
 TARGET_ARG="."
 for _arg in "$@"; do
   case "$_arg" in
     --force|-f) FORCE=true ;;
+    --update-hooks) UPDATE_HOOKS=true ;;
     *) TARGET_ARG="$_arg" ;;
   esac
 done
 TARGET="$(cd "$TARGET_ARG" && pwd)"
 PROJECT_NAME="$(basename "$TARGET")"
+
+# ── --update-hooks 빠른 경로 ───────────────────────────────────────
+# 이미 설치된 프로젝트의 .collar/hooks 를 템플릿 기준으로 갱신만 하고 종료한다.
+# 대화형 인터뷰(언어/목표/프로바이더 — 아래 read 들)를 건너뛰므로 비대화형에서도 안전.
+# 멱등: 누락 훅은 설치, 내용이 다른 훅만 .bak-update-* 백업 후 덮어쓰기, 동일하면 건너뜀.
+if [ "$UPDATE_HOOKS" = "true" ]; then
+  _UH_SRC="$COLLAR_HOME/templates/collar-hooks"
+  _UH_DEST="$TARGET/.collar/hooks"
+  if [ ! -d "$_UH_SRC" ]; then
+    echo "❌ 훅 템플릿 디렉토리 없음: $_UH_SRC" >&2
+    exit 1
+  fi
+  mkdir -p "$_UH_DEST"
+  _UH_INSTALLED=0; _UH_UPDATED=0; _UH_SAME=0
+  for _uh_file in "$_UH_SRC"/*.sh; do
+    [ -f "$_uh_file" ] || continue
+    _uh_name="$(basename "$_uh_file")"
+    _uh_dst="$_UH_DEST/$_uh_name"
+    if [ ! -f "$_uh_dst" ]; then
+      cp "$_uh_file" "$_uh_dst"; chmod +x "$_uh_dst"; _UH_INSTALLED=$((_UH_INSTALLED + 1))
+    elif ! cmp -s "$_uh_file" "$_uh_dst"; then
+      cp "$_uh_dst" "$_uh_dst.bak-update-$(date +%Y%m%d-%H%M%S)"
+      cp "$_uh_file" "$_uh_dst"; chmod +x "$_uh_dst"; _UH_UPDATED=$((_UH_UPDATED + 1))
+    else
+      _UH_SAME=$((_UH_SAME + 1))
+    fi
+  done
+  echo "🔄 collar-init --update-hooks → $_UH_DEST"
+  echo "   설치 ${_UH_INSTALLED} · 업데이트 ${_UH_UPDATED} · 변경없음 ${_UH_SAME}"
+  [ "$_UH_UPDATED" -gt 0 ] && echo "   (덮어쓴 기존 훅은 .bak-update-* 로 백업됨)"
+  exit 0
+fi
+
 # DB 스키마명: 프로젝트명을 snake_case로 변환 (camelCase → snake, hyphen → underscore)
 DB_SCHEMA="$(echo "$PROJECT_NAME" \
   | sed 's/\([A-Z]\)/_\1/g' \
@@ -744,7 +780,8 @@ echo "✅ .collar/tasks/ 생성 (요청 체크리스트 문서 저장소)"
 mkdir -p "$TARGET/.collar/hooks"
 HOOKS_SRC="$COLLAR_HOME/templates/collar-hooks"
 HOOKS_INSTALLED=0
-
+# 멱등: 기존 훅은 건너뜀(skip-existing). 설치된 프로젝트의 훅 업데이트는
+# 상단 `--update-hooks` 빠른 경로로 처리한다.
 if [ -d "$HOOKS_SRC" ]; then
   for hook_file in "$HOOKS_SRC"/*.sh; do
     [ -f "$hook_file" ] || continue
