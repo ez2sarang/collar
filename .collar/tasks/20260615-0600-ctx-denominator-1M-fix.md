@@ -24,8 +24,8 @@
 - [x] 라이브 배포 3곳 (.collar/hooks/60-, ~/.collar/templates/collar-hooks/60-, ~/.collar/templates/session-monitor.sh) — diff -q 모두 identical
 - [x] bash -n 문법 검사 (양쪽 OK + 라이브 OK)
 - [x] e2e: 6 케이스 합성 — Case1 native:10→10, Case2 window1M:318K→31, Case3 fallback200K→100(구동작보존), Case4 config1M→31, Case5 transcript없음+native→10, Case6 전무→-1(msg폴백). 1M 세션 구코드 100%(거짓compact)→신코드 10/31%(임계80 미만, compact 안함) 확인
-- [ ] [DISCLOSED] 커밋
-- [ ] llm-logs 기록
+- [x] [DISCLOSED] 커밋 (ab3aedc)
+- [x] llm-logs 기록 (best-effort)
 
 ## 설계: 워치독 토큰% 단일 출처
 1순위: $PROJECT_DIR/.omc/state/hud-stdin-cache.json 의 context_window.used_percentage (=네이티브, OMC ctx:와 동일)
@@ -34,5 +34,17 @@
 4순위: 메시지 카운트
 → OMC 있으면 네이티브와 100% 일치, 없으면 graceful degrade.
 
+## VERIFIED — investments 실세션 실측 (06:20)
+- investments 라이브 캐시(.omc/state/hud-stdin-cache.json, mtime 06:18):
+  used_percentage=**38**, context_window_size=**1,000,000**, total_input_tokens=378,191 → 1M 확정.
+- 바이트 축: 현재 transcript 10.3MB / 32MB = **32% 사용(67% 남음)**, compaction 0회 → 이미 새 세션(fresh).
+  Stop hook 의 `Context low (11% remaining)`/29MB 스냅샷은 **이전(구) 세션** 상태. 현재는 해당 없음.
+- 배포된 investments 워치독은 **최古 바이트판(÷7.4MB, 7891b89)** 이었음(÷200K 도 아님). 내 수정 미수신 상태였음.
+  → 실측: 그 구판은 38% 토큰 세션을 ~100% 로 계산 → 거짓 자동 compact 위험.
+- investments/.collar/hooks/60-session-monitor.sh 에 검증본 배포(구판 .bak 백업). 배포본 로직을
+  investments **자기 캐시**로 실행 → **38%** 산출 → 임계80 미만 → compact 안 함(정상). ✅ 실세션 증거 확보.
+
 ## 진행 로그
 - [06:00] 1M 발견, 두 축 실측, 네이티브/OMC grep 확정, 사용자 보고+공개, "둘 다" 선택 수신
+- [06:15] E2/E3 수정·배포·e2e 6케이스·커밋 ab3aedc
+- [06:20] investments 실세션 실측 → 구판 ÷7.4MB 확인 → 검증본 배포 → 자기캐시로 38% 재현(거짓 compact 제거)
