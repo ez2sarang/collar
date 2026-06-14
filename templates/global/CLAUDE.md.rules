@@ -301,7 +301,9 @@ STATUS: TESTED
 
 `Context low (N% remaining) · Run /compact` 경고가 토큰 ctx% 는 낮은데도 뜨면, 거의 항상
 **한 세션의 transcript 파일 누적** 탓이다. compact 가 반복되면 옛 줄이 파일에 그대로 쌓여,
-파일 크기를 페이로드 대용으로 재는 지표(OMC `payload est`, 네이티브 `Context low`)가 거짓 부푼다.
+파일 크기를 페이로드 대용으로 재는 지표(네이티브 `Context low`=on-disk transcript ÷ 32MB,
+OMC `payload est`=statSync ÷ 32MB)가 거짓 부푼다. 실측 예: 파일 29MB(=32MB의 90%)인데
+실제 API 요청은 102K 토큰 ≈ ~1-3MB(32MB의 1%) — 파일이 실제 요청의 약 70배(죽은 히스토리 98%).
 라이브 컨텍스트(실제 API 요청)는 파일 크기와 다르며 훨씬 작다.
 
 - **`/compact` 는 파일을 줄이지 않고 요약을 append → 파일이 더 커져 경고가 오히려 악화**된다.
@@ -309,5 +311,8 @@ STATUS: TESTED
 - AI 는 `/clear`·`/compact` 를 직접 실행 못 한다 → 이 상황을 감지하면 사용자에게 **안내**하라:
   "토큰은 N% 로 여유. 파일 누적에 의한 거짓 경고이니 `/compact` 말고 `/clear`(새 세션) 권장.
   세션 상태는 `.collar/session-compact.md`·`memory.md` 에 보존됨."
-- 판단 기준: transcript 마지막 메인스레드 턴 usage(input+cache_creation+cache_read) ÷ 200K =
-  실제 토큰%. 이게 낮은데 `Context low` 가 뜨면 거짓 경고로 간주한다.
+- 판단 기준(토큰%): 1순위 네이티브 `used_percentage`(OMC HUD `ctx:` 와 동일한 값).
+  없으면 마지막 메인스레드 턴 usage(input+cache_creation+cache_read) ÷ **context_window_size**.
+  **분모를 200K 로 추측 금지** — 세션마다 다르다(200K 또는 1M). 실제 값은
+  `.omc/state/hud-stdin-cache.json` 의 `context_window.context_window_size` 로 확인하라.
+  이 토큰%가 낮은데 `Context low` 가 뜨면 거짓 경고(파일 누적)로 간주한다.

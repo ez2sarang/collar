@@ -116,46 +116,69 @@ except: print('')
 CTX_PCT=0
 USE_MSG_FALLBACK=false
 
-if [ -n "$TRANSCRIPT" ] && [ -f "$TRANSCRIPT" ]; then
-  CTX_PCT="$(python3 - "$TRANSCRIPT" "$CTX_LIMIT" <<'PYEOF'
-import json, sys
-path, limit = sys.argv[1], int(sys.argv[2])
-try:
-    lines = open(path).read().splitlines()
-except Exception:
-    print(-1); sys.exit(0)
+# 동적 컨텍스트 한도: OMC stdin 캐시에서 네이티브 used_percentage / context_window_size 를
+# 읽어 200K/1M 세션을 자동 구분한다. (구버전 200K 하드코딩 → 1M 세션 5배 과대 → 거짓 compact)
+CTX_PCT="$(python3 - "$TRANSCRIPT" "$PROJECT_DIR" "$CTX_LIMIT" <<'PYEOF'
+import json, sys, os, glob
+transcript = sys.argv[1]
+project_dir = sys.argv[2]
+fallback_limit = int(sys.argv[3]) if sys.argv[3].isdigit() else 200000
+
+def load_cache():
+    cands = [os.path.join(project_dir, '.omc', 'state', 'hud-stdin-cache.json')]
+    cands += sorted(
+        glob.glob(os.path.join(project_dir, '.omc', 'state', 'sessions', '*', 'hud-stdin-cache.json')),
+        key=lambda p: os.path.getmtime(p) if os.path.exists(p) else 0, reverse=True)
+    for p in cands:
+        try:
+            return json.load(open(p))
+        except Exception:
+            continue
+    return {}
+
+cw = (load_cache() or {}).get('context_window', {}) or {}
+
+# 1) 네이티브 used_percentage 우선 (Claude Code 보고값 = HUD ctx: 와 동일)
+nat = cw.get('used_percentage')
+if isinstance(nat, (int, float)) and nat > 0:
+    print(min(int(round(nat)), 100)); sys.exit(0)
+
+# 2) transcript 마지막 메인스레드 턴 usage ÷ 동적 window size
+window = cw.get('context_window_size')
+if not (isinstance(window, (int, float)) and window > 0):
+    window = fallback_limit
 total = None
-for ln in reversed(lines):                 # 최신 턴부터 역순 탐색
+if transcript and os.path.exists(transcript):
     try:
-        d = json.loads(ln)
+        lines = open(transcript).read().splitlines()
     except Exception:
-        continue
-    if d.get('isSidechain'):               # 서브에이전트 컨텍스트 제외
-        continue
-    msg = d.get('message') if isinstance(d.get('message'), dict) else {}
-    u = msg.get('usage') or d.get('usage')
-    if not isinstance(u, dict):
-        continue
-    total = (u.get('input_tokens', 0)
-             + u.get('cache_creation_input_tokens', 0)
-             + u.get('cache_read_input_tokens', 0))
-    break
+        lines = []
+    for ln in reversed(lines):                 # 최신 턴부터 역순
+        try:
+            d = json.loads(ln)
+        except Exception:
+            continue
+        if d.get('isSidechain'):               # 서브에이전트 컨텍스트 제외
+            continue
+        msg = d.get('message') if isinstance(d.get('message'), dict) else {}
+        u = msg.get('usage') or d.get('usage')
+        if not isinstance(u, dict):
+            continue
+        total = (u.get('input_tokens', 0)
+                 + u.get('cache_creation_input_tokens', 0)
+                 + u.get('cache_read_input_tokens', 0))
+        break
 if total is None:
-    print(-1)                              # usage 못 찾음 → 폴백 신호
+    print(-1)                                  # usage·캐시 모두 없음 → 폴백 신호
 else:
-    pct = int(total * 100 / limit) if limit > 0 else 0
+    pct = int(total * 100 / window) if window > 0 else 0
     print(min(pct, 100))
 PYEOF
 )"
-  CTX_PCT="${CTX_PCT:--1}"
-  if [ "$CTX_PCT" -lt 0 ] 2>/dev/null; then
-    # transcript 에 usage 없음 → 메시지 카운트 폴백
-    USE_MSG_FALLBACK=true
-    CTX_PCT=0
-  fi
-else
-  # transcript 경로 없음 → 메시지 카운트 폴백
+CTX_PCT="${CTX_PCT:--1}"
+if [ "$CTX_PCT" -lt 0 ] 2>/dev/null; then
   USE_MSG_FALLBACK=true
+  CTX_PCT=0
 fi
 
 # ── 메시지 카운트 폴백 ─────────────────────────────────────────────
