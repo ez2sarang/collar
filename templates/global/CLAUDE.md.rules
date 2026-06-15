@@ -297,22 +297,26 @@ STATUS: TESTED
 2. CLAUDE.md에 틀린 내용 있으면 직접 수정
 3. 대화가 길어졌다면 (메시지 10개 이상) `collar-compact` 실행
 
-## "Context low" 거짓 경고 = transcript 파일 누적 (모든 프로젝트 공통)
+## "Context low" 거짓 경고 = 네이티브 auto-compact 분모(≈200K)가 1M 윈도우로 안 스케일 (모든 프로젝트 공통)
 
-`Context low (N% remaining) · Run /compact` 경고가 토큰 ctx% 는 낮은데도 뜨면, 거의 항상
-**한 세션의 transcript 파일 누적** 탓이다. compact 가 반복되면 옛 줄이 파일에 그대로 쌓여,
-파일 크기를 페이로드 대용으로 재는 지표(네이티브 `Context low`=on-disk transcript ÷ 32MB,
-OMC `payload est`=statSync ÷ 32MB)가 거짓 부푼다. 실측 예: 파일 29MB(=32MB의 90%)인데
-실제 API 요청은 102K 토큰 ≈ ~1-3MB(32MB의 1%) — 파일이 실제 요청의 약 70배(죽은 히스토리 98%).
-라이브 컨텍스트(실제 API 요청)는 파일 크기와 다르며 훨씬 작다.
+`Context low (N% remaining) · Run /compact` 경고가 토큰 ctx%(OMC HUD `ctx:`)는 낮은데도 뜨면,
+**네이티브 auto-compact 경고의 분모가 실제 컨텍스트 윈도우가 아니라 ≈200K(또는 env
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` 값)로 고정**돼 있기 때문이다. 1M 베타 세션은
+`exceeds_200k_tokens:true`가 되는 순간(=200K 초과) 실제로는 수십% 여유여도 네이티브 계산은
+`사용토큰 ÷ 200K > 100%` → "0% remaining"으로 거짓 경고한다.
+검증(2026-06-15 investments): 313,846토큰 ÷ 1,000,000 = **31% 사용(실제 69% 여유)**인데 ÷200K = 157% → 0% remaining.
+공식문서 확인(claude-code-guide): docs context-window 시뮬레이터 `const MAX=200000`, changelog v2.1.154 "standard context limit".
 
-- **`/compact` 는 파일을 줄이지 않고 요약을 append → 파일이 더 커져 경고가 오히려 악화**된다.
-- 파일 축을 실제로 리셋하는 건 **`/clear` 또는 새 세션**(새 transcript 파일 시작)뿐이다.
-- AI 는 `/clear`·`/compact` 를 직접 실행 못 한다 → 이 상황을 감지하면 사용자에게 **안내**하라:
-  "토큰은 N% 로 여유. 파일 누적에 의한 거짓 경고이니 `/compact` 말고 `/clear`(새 세션) 권장.
-  세션 상태는 `.collar/session-compact.md`·`memory.md` 에 보존됨."
-- 판단 기준(토큰%): 1순위 네이티브 `used_percentage`(OMC HUD `ctx:` 와 동일한 값).
-  없으면 마지막 메인스레드 턴 usage(input+cache_creation+cache_read) ÷ **context_window_size**.
-  **분모를 200K 로 추측 금지** — 세션마다 다르다(200K 또는 1M). 실제 값은
-  `.omc/state/hud-stdin-cache.json` 의 `context_window.context_window_size` 로 확인하라.
-  이 토큰%가 낮은데 `Context low` 가 뜨면 거짓 경고(파일 누적)로 간주한다.
+- **이전 가설("transcript 파일 ÷ 32MB 누적")은 반증됨**: 활성 파일 10MB(÷32MB=31%)인데 "0% remaining" 발생 →
+  파일 크기로는 설명 불가. 파일%와 경고가 우연히 비슷했던 상관관계를 인과로 착각한 것이었다.
+- **근본 해결**: `~/.claude/settings.json` env `CLAUDE_CODE_AUTO_COMPACT_WINDOW`를 실제 윈도우에 맞춰라.
+  1M 세션이면 `"900000"`(1M의 90%, 컴팩션 헤드룸 100K). **이 값을 200K 미만(예: 175000)으로 두면 거짓 경고가 더 악화**된다.
+  env는 세션 시작 시 로드되므로 변경 후 **새 세션 재시작**이 필요하다. (단, 비-1M(200K) 세션만 쓰는 환경이면 이 값을 올리면
+  실제 200K 한계에서 컴팩션이 안 걸려 위험 — 1M 계정에서만 올려라.)
+- `autoCompactEnabled: false`만으로는 경고가 안 사라진다(자동 동작만 막고 경고 UI는 그대로). 검증됨: investments가
+  이미 `false`인데도 경고 발생.
+- `/compact`·`/clear`는 임시 리셋일 뿐 — 1M 세션은 다시 200K를 넘으면 재발한다. 근본 해결은 위 env 분모 조정.
+- 판단 기준(토큰%): 1순위 네이티브 `used_percentage`(OMC HUD `ctx:`와 동일). 없으면 마지막 메인스레드 턴
+  usage(input+cache_creation+cache_read) ÷ **context_window_size**. **분모 200K 추측 금지** — 실제 값은
+  `.omc/state/hud-stdin-cache.json`의 `context_window.context_window_size`. 이 토큰%가 낮은데 `Context low`가 뜨면
+  네이티브 분모 미스칼리브레이션(파일 누적 아님)으로 간주한다.
