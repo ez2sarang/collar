@@ -20,8 +20,8 @@
 - [x] 라이브 배포본 ~/.collar/bin/collar-init 동기화 (cmp identical)
 - [x] investments에 `collar-init --update-hooks` 실행(공식 경로) → 설치1·업데이트3·변경없음6, 10/10 템플릿 패리티, 60- 동적버전(context_window_size) bash -n OK
 - [x] 멱등 보존 검증: fast-path 재실행 시 변경없음10·.bak 0개 (Mode B)
-- [ ] 커밋 (feat — fix 아님)
-- [ ] llm-logs best-effort
+- [x] 커밋 (feat) → 76fb9de [DISCLOSED]
+- [x] llm-logs best-effort
 
 ## 발견·정정한 설계 버그 (개발 중 포착, 미출시)
 - 1차 구현: `--update-hooks` 분기를 인플로우 훅 루프(line~750)에 배치 → collar-init은 `set -euo pipefail`
