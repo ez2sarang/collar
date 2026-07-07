@@ -49,6 +49,13 @@ YouTube I-JuFhY5W54, 슬라이드 76장 OCR 분석)을 정밀 검토하여 colla
   멱등(10 SKIP), fable on/off 심링크 전환 확인, settings.json JSON 유효성 확인
 - [18:30] 글로벌 설치라 investments 등 모든 프로젝트에서 새 세션부터 즉시 적용.
   단, 이미 떠 있는 세션에는 미적용(가이드 명시). effort high는 사용자가 /effort로 기적용.
+- [18:45] README 도구 표·사용법 섹션 + doc/2026-07-07-fable-orchestration.md 설계 문서
+  반영(5cf809f), GitHub push (7891b89..5cf809f — 미배포 19커밋 일괄 배포)
+- [19:03] **실세션 끝단 검증 (VERIFIED)** — 새 claude 세션 2개(비대화형, 격리 디렉토리):
+  1) 메인 에이전트 c1/c2/c3.ts 직접 생성 → c1·c2 생성, c3 도구 호출 단계 차단
+     (차단 메시지 원문 수신, c3.ts 디스크 미존재), gate.json에 session_id+prompt_id+파일 2건 기록
+  2) executor 서브에이전트 위임 d1/d2/d3.ts → 3개 전부 생성 (agent_id 통과 확인)
+  → 가이드 완성 기준(메인 차단 + 서브 통과 동시 충족) 만족
 
 ## 참고 (영상의 나머지 권고 — 별도 조치 불필요)
 - effort max 금지·high 권장: 현재 settings effortLevel=high ✅
