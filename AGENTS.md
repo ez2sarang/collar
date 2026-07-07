@@ -44,6 +44,10 @@ collar/
 │   ├── collar-usage       # Claude Max / Gemini Pro 구독 사용량 요약
 │   ├── collar-template-sync # 글로벌 규칙-템플릿 갭 분석 + 자동 동기화
 │   ├── collar-conductor   # 관리·감독 오케스트레이터 (Executor→Verifier 루프)
+│   ├── collar-fable       # Fable 5 오케스트레이션 4계층 설치/토글
+│   │                      #   install/on/off/status/uninstall — 지침 스위치 +
+│   │                      #   deep-reasoner·runner + Sonnet→Opus 리매핑 +
+│   │                      #   PreToolUse 강제 게이트(메인 턴당 코드 2파일 제한)
 │   ├── collar-learn       # 구조화 인사이트 기록 → .collar/insights.jsonl (gstack 호환)
 │   ├── collar-migrate-gstack # gstack learnings.jsonl → .collar/insights.jsonl 이관
 │   ├── collar-metrics     # KPI 대시보드 — 기존 산출물에서 지표 집계 (--json)
@@ -54,6 +58,7 @@ collar/
 │   ├── AGENTS.md.base         # 에이전트 가이드 템플릿
 │   ├── collar-dispatcher.sh   # 이중 훅 Layer 1 라우터
 │   ├── collar-hooks/          # 보안·모니터링 훅 모음 (10/20/30/40/50/60번)
+│   ├── fable/                 # Fable 오케스트레이션 템플릿 (fable.md·agents·env.sh·게이트)
 │   ├── global/                # 글로벌 규칙 + 메모리 템플릿
 │   ├── session-monitor.sh     # ctx% 감시 + memory.md 자동 정리
 │   ├── github-check.sh        # 세션 시작 시 GitHub 이슈 체크

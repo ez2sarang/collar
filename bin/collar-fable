@@ -1,0 +1,234 @@
+#!/usr/bin/env bash
+# collar-fable — Fable 5 오케스트레이션 셋업 & 토글
+#
+# Fable 5(지휘) + Opus 4.8(실행) + Haiku 4.5(잡무) 3단 역할 분리를
+# 지침·서브에이전트·Sonnet→Opus 리매핑·PreToolUse 강제 게이트 4계층으로 설치한다.
+# 글로벌(~/.claude) 설치라서 한 번 설치하면 모든 프로젝트에 즉시 적용된다.
+#
+# 사용법:
+#   collar-fable install    # 4계층 설치 (멱등 — 여러 번 실행해도 안전)
+#   collar-fable on         # 오케스트레이션 켜기 (다음 세션부터 적용)
+#   collar-fable off        # 끄기 (로딩 코드는 그대로, 심링크·상태만 전환)
+#   collar-fable status     # 현재 상태 + 로딩 코드 4종 설치 여부 점검
+#   collar-fable uninstall  # 설치 제거 (설정 파일의 로딩 라인 포함)
+#
+# 근거: 성공지식백과 "Fable 5 오케스트레이션 가이드" (2026-07-04) + Anthropic advisor 전략
+
+set -euo pipefail
+
+FABLE_HOME="$HOME/.claude/fable"
+STATE_FILE="$FABLE_HOME/fable-state"
+CLAUDE_MD="$HOME/.claude/CLAUDE.md"
+SETTINGS="$HOME/.claude/settings.json"
+AGENTS_DIR="$HOME/.claude/agents"
+LOADER_MARK="fable-loader"
+
+# 템플릿 위치: 레포 bin/에서 실행하면 레포 templates/, 설치본이면 ~/.collar/templates/
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -d "$SCRIPT_DIR/../templates/fable" ]; then
+  TPL="$(cd "$SCRIPT_DIR/../templates/fable" && pwd)"
+elif [ -d "$HOME/.collar/templates/fable" ]; then
+  TPL="$HOME/.collar/templates/fable"
+else
+  TPL=""
+fi
+
+ok()   { printf '  [OK]   %s\n' "$1"; }
+skip() { printf '  [SKIP] %s\n' "$1"; }
+warn() { printf '  [WARN] %s\n' "$1"; }
+
+# 대상이 없으면 복사, 다르면 백업 후 갱신, 같으면 skip (collar-init --update-hooks 패턴)
+deploy_file() {
+  local src="$1" dst="$2" ts
+  if [ ! -f "$dst" ]; then
+    cp "$src" "$dst" && ok "설치: $dst"
+  elif cmp -s "$src" "$dst"; then
+    skip "변경 없음: $dst"
+  else
+    ts="$(date +%Y%m%d-%H%M%S)"
+    cp "$dst" "$dst.bak-update-$ts"
+    cp "$src" "$dst" && ok "업데이트: $dst (백업: .bak-update-$ts)"
+  fi
+}
+
+append_once() { # marker file line...
+  local marker="$1" file="$2"; shift 2
+  if [ -f "$file" ] && grep -q "$marker" "$file"; then
+    skip "이미 설치: $file ($marker)"
+  else
+    printf '\n%s\n' "$*" >> "$file"
+    ok "로딩 코드 추가: $file"
+  fi
+}
+
+register_hook() {
+  python3 - "$SETTINGS" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        s = json.load(f)
+except FileNotFoundError:
+    s = {}
+cmd = 'python3 "$HOME/.claude/fable/hooks/orchestration-gate.py"'
+hooks = s.setdefault("hooks", {}).setdefault("PreToolUse", [])
+for entry in hooks:
+    for h in entry.get("hooks", []):
+        if "orchestration-gate.py" in h.get("command", ""):
+            print("  [SKIP] settings.json 게이트 훅 이미 등록됨")
+            sys.exit(0)
+hooks.append({
+    "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+    "hooks": [{"type": "command", "command": cmd, "timeout": 10}],
+})
+with open(path, "w") as f:
+    json.dump(s, f, indent=2, ensure_ascii=False)
+    f.write("\n")
+print("  [OK]   settings.json 에 PreToolUse 게이트 훅 등록")
+PYEOF
+}
+
+unregister_hook() {
+  python3 - "$SETTINGS" <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+try:
+    with open(path) as f:
+        s = json.load(f)
+except FileNotFoundError:
+    sys.exit(0)
+hooks = s.get("hooks", {}).get("PreToolUse", [])
+kept = [e for e in hooks
+        if not any("orchestration-gate.py" in h.get("command", "") for h in e.get("hooks", []))]
+if len(kept) != len(hooks):
+    s["hooks"]["PreToolUse"] = kept
+    with open(path, "w") as f:
+        json.dump(s, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    print("  [OK]   settings.json 게이트 훅 제거")
+PYEOF
+}
+
+cmd_install() {
+  [ -n "$TPL" ] || { echo "오류: templates/fable 을 찾을 수 없습니다." >&2; exit 1; }
+  echo "🐎 collar-fable install — Fable 오케스트레이션 4계층 설치"
+
+  mkdir -p "$FABLE_HOME/agents" "$FABLE_HOME/hooks" "$FABLE_HOME/state" "$AGENTS_DIR"
+
+  # 계층 1: 지침 + 스위치
+  deploy_file "$TPL/fable.md" "$FABLE_HOME/fable.md"
+  deploy_file "$TPL/empty.md" "$FABLE_HOME/empty.md"
+  if [ ! -e "$STATE_FILE" ]; then echo "on" > "$STATE_FILE"; ok "스위치 상태: on (기본)"; fi
+  if [ ! -L "$FABLE_HOME/active.md" ]; then
+    ln -sfn "$FABLE_HOME/fable.md" "$FABLE_HOME/active.md"; ok "심링크: active.md -> fable.md"
+  else
+    skip "심링크 이미 존재: active.md"
+  fi
+  append_once "$LOADER_MARK" "$CLAUDE_MD" \
+    "<!-- $LOADER_MARK: 토글은 fable on/off, 이 줄은 그대로 둡니다 -->
+@$FABLE_HOME/active.md"
+
+  # 계층 2: 서브에이전트
+  deploy_file "$TPL/agents/deep-reasoner.md" "$FABLE_HOME/agents/deep-reasoner.md"
+  deploy_file "$TPL/agents/runner.md" "$FABLE_HOME/agents/runner.md"
+  for a in deep-reasoner runner; do
+    if [ -e "$AGENTS_DIR/$a.md" ] && [ ! -L "$AGENTS_DIR/$a.md" ]; then
+      warn "$AGENTS_DIR/$a.md 가 심링크가 아닌 실파일 — 건드리지 않음"
+    else
+      ln -sfn "$FABLE_HOME/agents/$a.md" "$AGENTS_DIR/$a.md"
+      ok "에이전트 심링크: $a.md"
+    fi
+  done
+
+  # 계층 3: Sonnet→Opus 리매핑 (셸 래퍼)
+  deploy_file "$TPL/env.sh" "$FABLE_HOME/env.sh"
+  local loader='# fable 오케스트레이션 스위치 로더 (collar-fable)
+[ -f "$HOME/.claude/fable/env.sh" ] && . "$HOME/.claude/fable/env.sh"'
+  for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+    [ -f "$rc" ] && append_once "fable/env.sh" "$rc" "$loader"
+  done
+
+  # 계층 4: PreToolUse 강제 게이트
+  deploy_file "$TPL/hooks/orchestration-gate.py" "$FABLE_HOME/hooks/orchestration-gate.py"
+  chmod +x "$FABLE_HOME/hooks/orchestration-gate.py"
+  register_hook
+
+  # fable 단축 명령
+  if [ -d "$HOME/.collar/bin" ]; then
+    ln -sfn "$HOME/.collar/bin/collar-fable" "$HOME/.collar/bin/fable" 2>/dev/null \
+      && ok "단축 명령: fable -> collar-fable" || true
+  fi
+
+  echo ""
+  echo "✅ 설치 완료. 이미 떠 있는 세션에는 적용되지 않습니다 — 새 세션부터 적용."
+  echo "   리매핑은 새 터미널 또는 'source ~/.zshrc' 후 claude 실행 시 활성."
+  cmd_status
+}
+
+cmd_on() {
+  [ -f "$FABLE_HOME/fable.md" ] || { echo "먼저 collar-fable install 을 실행하세요." >&2; exit 1; }
+  echo "on" > "$STATE_FILE"
+  ln -sfn "$FABLE_HOME/fable.md" "$FABLE_HOME/active.md"
+  echo "🐎 Fable 오케스트레이션: ON (다음 세션부터 적용)"
+}
+
+cmd_off() {
+  [ -f "$FABLE_HOME/empty.md" ] || { echo "먼저 collar-fable install 을 실행하세요." >&2; exit 1; }
+  echo "off" > "$STATE_FILE"
+  ln -sfn "$FABLE_HOME/empty.md" "$FABLE_HOME/active.md"
+  echo "🐎 Fable 오케스트레이션: OFF (다음 세션부터 적용)"
+}
+
+cmd_status() {
+  local state="unknown"
+  [ -f "$STATE_FILE" ] && state="$(cat "$STATE_FILE")"
+  echo ""
+  echo "🐎 Fable 오케스트레이션: $(echo "$state" | tr '[:lower:]' '[:upper:]')"
+  if [ -L "$FABLE_HOME/active.md" ]; then
+    echo "   active.md -> $(readlink "$FABLE_HOME/active.md")"
+  else
+    echo "   active.md 심링크 없음"
+  fi
+  local mark=""
+  [ -f "$CLAUDE_MD" ] && grep -q "$LOADER_MARK" "$CLAUDE_MD" && mark="[OK]" || mark="[--]"
+  echo "   $mark @import        ~/.claude/CLAUDE.md"
+  mark="[--]"
+  { [ -f "$HOME/.zshrc" ] && grep -q "fable/env.sh" "$HOME/.zshrc"; } \
+    || { [ -f "$HOME/.bashrc" ] && grep -q "fable/env.sh" "$HOME/.bashrc"; } && mark="[OK]"
+  echo "   $mark env 래퍼       ~/.zshrc | ~/.bashrc"
+  mark="[--]"
+  [ -L "$AGENTS_DIR/deep-reasoner.md" ] && [ -L "$AGENTS_DIR/runner.md" ] && mark="[OK]"
+  echo "   $mark agents         ~/.claude/agents/{deep-reasoner,runner}.md"
+  mark="[--]"
+  [ -f "$SETTINGS" ] && grep -q "orchestration-gate.py" "$SETTINGS" && mark="[OK]"
+  echo "   $mark 게이트 훅      ~/.claude/settings.json"
+  mark="[--]"
+  [ -x "$FABLE_HOME/hooks/orchestration-gate.py" ] && mark="[OK]"
+  echo "   $mark 게이트 스크립트 $FABLE_HOME/hooks/orchestration-gate.py"
+}
+
+cmd_uninstall() {
+  echo "🐎 collar-fable uninstall"
+  unregister_hook
+  for rc in "$HOME/.zshrc" "$HOME/.bashrc"; do
+    if [ -f "$rc" ] && grep -q "fable/env.sh" "$rc"; then
+      sed -i.bak-fable '/fable 오케스트레이션 스위치 로더/d; /fable\/env.sh/d' "$rc"
+      ok "로더 제거: $rc"
+    fi
+  done
+  if [ -f "$CLAUDE_MD" ] && grep -q "$LOADER_MARK" "$CLAUDE_MD"; then
+    sed -i.bak-fable "/$LOADER_MARK/d; /@.*\.claude\/fable\/active\.md/d" "$CLAUDE_MD"
+    ok "@import 제거: $CLAUDE_MD"
+  fi
+  rm -f "$AGENTS_DIR/deep-reasoner.md" "$AGENTS_DIR/runner.md" "$HOME/.collar/bin/fable"
+  echo "   설정 본체($FABLE_HOME)는 남겨둡니다. 완전 삭제: rm -rf $FABLE_HOME"
+}
+
+case "${1:-status}" in
+  install)   cmd_install ;;
+  on)        cmd_on ;;
+  off)       cmd_off ;;
+  status)    cmd_status ;;
+  uninstall) cmd_uninstall ;;
+  *) echo "사용법: collar-fable {install|on|off|status|uninstall}" >&2; exit 1 ;;
+esac
