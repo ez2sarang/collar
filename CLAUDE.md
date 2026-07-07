@@ -89,7 +89,8 @@ collar/
     ├── 2026-05-14-session-qa.md
     ├── 2026-05-14-memory-system-design.md
     ├── 2026-05-17-npm-package-design.md
-    └── 2026-05-20-eval-framework.md
+    ├── 2026-05-20-eval-framework.md
+    └── 2026-07-07-fable-orchestration.md
 ```
 
 ---

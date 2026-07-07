@@ -129,6 +129,28 @@ $ collar-update                # AI가 CLAUDE.md TODO 항목만 자동 채우기
 | `collar-eval-model` | Claude/Gemini/Cerebras 모델을 3차원 평가 (정확성·사고력·속도) → simple/standard/complex 카테고리 자동 배치 |
 | `collar-usage` | Claude Max / Gemini Pro 구독 사용량 현황 요약 (날짜별·프로바이더별·모델별) |
 | `collar-template-sync` | 글로벌 규칙과 프로젝트 메모리의 갭을 LLM으로 분석 → 템플릿 자동 업데이트 |
+| `collar-fable` | Fable 5 오케스트레이션 4계층 설치/토글 — 지침 스위치 + deep-reasoner·runner 에이전트 + Sonnet→Opus 리매핑 + PreToolUse 강제 게이트. `fable on/off/status` |
+
+### collar-fable — Fable 5 오케스트레이션 (토큰 최적화)
+
+Fable 5(지휘) + Opus 4.8(실행) + Haiku 4.5(잡무) 3단 역할 분리를 물리적으로 강제한다.
+비싼 모델이 싼 일을 하지 않게 만들어 토큰 소모를 최대 80~90% 절감.
+
+```bash
+collar-fable install   # 4계층 글로벌(~/.claude) 설치 — 모든 프로젝트 즉시 적용
+fable on / off         # 토글 (CLAUDE.md 불변 — active.md 심링크만 전환)
+fable status           # 상태 + 로딩 코드 4종 설치 여부 점검
+```
+
+| 계층 | 내용 | 파일 |
+|------|------|------|
+| 1. 지침 선언 | 오케스트레이터 역할·라우팅 기준 + on/off 스위치 | `~/.claude/fable/fable.md` |
+| 2. 역할 배정 | deep-reasoner(Opus 4.8/max), runner(Haiku 4.5/low) | `~/.claude/fable/agents/` |
+| 3. 리매핑 | 스위치 on일 때만 `ANTHROPIC_DEFAULT_SONNET_MODEL=claude-opus-4-8` 주입 | `~/.claude/fable/env.sh` |
+| 4. 강제 게이트 | 메인 에이전트 턴당 코드 2파일 제한 (서브에이전트는 통과) | `hooks/orchestration-gate.py` |
+
+주의: 이미 떠 있는 세션에는 적용되지 않는다 (새 세션부터). 리매핑은 터미널 `claude` 실행 경로에만 적용.
+상세 설계: `doc/2026-07-07-fable-orchestration.md`
 
 ---
 
